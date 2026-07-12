@@ -15,9 +15,11 @@ repolock is **a protocol plus a reference implementation, not a service**:
   idle-dirty lapses, and the read-side drift check.
 - **`repolock/`** — the reference library. Pure stdlib, zero dependencies:
   `acquire` / `renew` / `release` / `go_idle` / `status` / `drift`.
-- **`repolock/hooks/claude_code.py`** — adapter #1: a Claude Code PreToolUse/Stop/SessionStart
-  hook that makes the lock *binding*. Enforcement cannot be an MCP tool — a tool is something
-  the model chooses to call, and the offending session never chooses to.
+- **`repolock/hooks/`** — the adapters that make the lock *binding*: `claude_code.py`
+  (PreToolUse/Stop/SessionStart) and `cursor.py` (preToolUse/beforeShellExecution/stop).
+  Enforcement cannot be an MCP tool — a tool is something the model chooses to call, and the
+  offending session never chooses to. A lock taken through one vendor's hook holds out a
+  session arriving through the other's; the test suite executes exactly that.
 - **`repolock/server.py`** *(extra `mcp`)* — a read-mostly stdio MCP server for visibility and
   the deliberate human override: `lock_status`, `lock_drift`, `lock_debug`, `force_unlock`.
 
@@ -49,6 +51,27 @@ guarded — use an absolute path to a python that can import `repolock`:
 ```
 
 Optionally register the MCP server for visibility (`uv run python -m repolock.server`).
+
+## Install (Cursor)
+
+Same lockfile, Cursor's wire format — `~/.cursor/hooks.json`:
+
+```json
+{
+  "version": 1,
+  "hooks": {
+    "preToolUse":           [{"command": "<python> <checkout>/repolock/hooks/cursor.py"}],
+    "beforeShellExecution": [{"command": "<python> <checkout>/repolock/hooks/cursor.py"}],
+    "stop":                 [{"command": "<python> <checkout>/repolock/hooks/cursor.py"}],
+    "sessionEnd":           [{"command": "<python> <checkout>/repolock/hooks/cursor.py"}],
+    "sessionStart":         [{"command": "<python> <checkout>/repolock/hooks/cursor.py"}],
+    "beforeSubmitPrompt":   [{"command": "<python> <checkout>/repolock/hooks/cursor.py"}]
+  }
+}
+```
+
+Run both harnesses against the same clone and each one's sessions are held out of the other's
+mid-change tree — which is the point.
 
 ## What it feels like
 
