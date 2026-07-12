@@ -114,17 +114,9 @@ LEDGER = Bom(
                                        "issue; the honest wiring is config"}),
              ]),
 
-        Node(id="hyp-obsolescence", kind="hypothesis",
-             name="Planned obsolescence: harnesses absorb the convention",
-             meta={"claim": "The durable value is the convention (spec), not this codebase; "
-                            "success is vendors shipping equivalent guards natively."},
-             children=[
-                 Node(id="kill-obsolescence", kind="falsifier",
-                      meta={"observation":
-                            "A second harness adapter never materializes AND vendor worktree "
-                            "isolation covers every collision observed in practice — then the "
-                            "niche claim is false and the repo is reference-only."}),
-             ]),
+        # Positioning statements (e.g. the README's "planned obsolescence" line) do not belong
+        # here: nothing in the design leans on them and no rule or tape can falsify them. The
+        # ledger holds only what gates future work.
 
         Node(id="hyp-renewal-on-activity", kind="hypothesis",
              name="Renew-on-tool-call keeps live sessions from lapsing mid-work",
