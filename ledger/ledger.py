@@ -382,6 +382,36 @@ HYPOTHESES = [
                            "is a query over a recording rather than a bug report from a human."}),
          ]),
 
+    Node(id="hyp-subagents-share-the-session-id", kind="hypothesis",
+         name="A subagent's tool calls carry its PARENT's session id, so the lock is reentrant "
+              "across the whole agent tree",
+         payload={"claim": "A session spawns subagents; a subagent writes the same checkout its "
+                           "parent holds. The lock survives that only because the child's tool "
+                           "calls reach the hook with the PARENT's session_id, and acquire() is "
+                           "reentrant for the same session — so the parent RENEWS instead of "
+                           "refusing itself.\n\n"
+                           "This was never checked, and it is the difference between a lock and a "
+                           "hang. If a subagent had an id of its own, a parent holding the lock "
+                           "would refuse its own child WHILE BLOCKING ON THAT CHILD'S RESULT: a "
+                           "deadlock that neither lock_wait nor the ticket can break, because the "
+                           "holder is the very thing being waited for.\n\n"
+                           "VERIFIED 2026-07-13 against a real headless run with a logging hook: "
+                           "the parent's own Bash and its subagent's Bash arrived with the same "
+                           "session_id. One level of nesting was exercised; deeper nesting is "
+                           "inferred from the id being a property of the SESSION, not of the agent, "
+                           "and that inference is what the falsifier below watches.",
+                  "status": "verified once, watched continuously",
+                  "cadence": "every hook call"},
+         children=[
+             Node(id="kill-subagent-has-own-id", kind="falsification",
+                  payload={"claim":
+                           "A tape shows two DIFFERENT session_ids issuing hook calls against one "
+                           "repo within a single conversation — i.e. an agent tree whose children "
+                           "do not inherit the parent's id. Fires on the id itself, cheaply, on "
+                           "any recording, LONG BEFORE anyone deadlocks: it does not wait for the "
+                           "hang to prove the hang is possible."}),
+         ]),
+
     Node(id="hyp-renewal-on-activity", kind="hypothesis",
          name="Renew-on-tool-call keeps live sessions from lapsing mid-work",
          payload={"claim": "A 600s hook lease outlasts the longest single tool call, so an active "

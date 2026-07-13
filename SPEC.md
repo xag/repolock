@@ -240,3 +240,15 @@ NOT implement it.
   worktree, that is the better answer; this convention covers what worktrees don't reach —
   interactive sessions deliberately pointed at the same checkout, mixed-vendor fleets, and the
   stale-reader drift check.
+- **Not a lock between a session and its own subagents, and this is deliberate.** A subagent's tool
+  calls reach the hook carrying the **parent's** session id (verified against a real run, not
+  assumed). Acquire is reentrant, so a parent that holds the lock *renews* when its child writes.
+
+  It has to be this way. If a subagent had an id of its own, a parent holding the lock would refuse
+  its own child **while blocking on that child's result** — not contention but a deadlock, and one
+  that neither a wait nor a ticket can break, because the holder is the very thing being waited for.
+
+  The price: a session and all its subagents are **one holder**, so the convention does not
+  arbitrate between two subagents of the same session running in parallel against one checkout.
+  That is the harness's problem, and the harness has the better answer for it (give each agent its
+  own worktree). A lock cannot fix intra-session concurrency without deadlocking on it.
