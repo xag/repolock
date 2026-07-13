@@ -24,7 +24,9 @@ module decides; that module touches the world.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 from dataclasses import asdict, dataclass, field
 
 from repolock import env
@@ -144,7 +146,7 @@ def acquire(repo: str, session: str, pid: int, lease_seconds: float = DEFAULT_LE
     prior_live = _live(cur, now) if cur else False
 
     if cur and prior_session == session and prior_live:
-        return renew(repo, session, lease)
+        return renew(repo, session, lease, intent=intent)
 
     if cur and prior_live:
         return {"status": "held", "repo": repo, "lock": asdict(cur),
@@ -163,10 +165,17 @@ def acquire(repo: str, session: str, pid: int, lease_seconds: float = DEFAULT_LE
             "lockfile": wrote_path}
 
 
-def renew(repo: str, session: str, lease_seconds: float = DEFAULT_LEASE_SECONDS) -> dict:
+def renew(repo: str, session: str, lease_seconds: float = DEFAULT_LEASE_SECONDS,
+          intent: str = "") -> dict:
     """Extend the lease. Called on every tool call by the harness hook — that is what makes
     renewal key on *activity* rather than on mere process liveness, and it is why an idle session
-    lets go on its own without anything having to notice that it went idle."""
+    lets go on its own without anything having to notice that it went idle.
+
+    It also refreshes the INTENT, which is not cosmetic. The intent is what a refused session reads
+    to decide whether to wait ten seconds or go and do something else, and a stale one actively
+    misleads: a holder that took the lock to edit a file an hour ago, and is now half way through a
+    test run, would otherwise still be advertised as editing that file.
+    """
     repo = env.canonical(repo)
     now = env.now()
     cur = _load(repo)
@@ -180,6 +189,8 @@ def renew(repo: str, session: str, lease_seconds: float = DEFAULT_LEASE_SECONDS)
     cur.renewed_at = now
     cur.expires_at = now + lease
     cur.lease_seconds = lease
+    if intent:
+        cur.intent = intent
     cur.idle_since = None            # renewing IS activity; whatever idleness we noted is over
     cur.dirty_at_idle = []
     wrote_path = env.write_record(repo, cur.to_json())
@@ -311,6 +322,78 @@ def needs_commit_warning(repo: str, session: str) -> dict | None:
     return {"repo": repo, "expires_in": round(left, 1), "uncommitted": dirty,
             "message": (f"Lease on {repo} expires in {round(left)}s and {len(dirty)} change(s) "
                         "are still uncommitted. Commit now, or renew if you need longer.")}
+
+
+MCP_MAX_WAIT_SECONDS = 240         # under MCP's hard idle timeout, which killed a call at exactly
+                                   # 300s. It is a fact about the TRANSPORT, so it is enforced by the
+                                   # MCP tool and not here: a background waiter (repolock.waitfor)
+                                   # has no such ceiling and may legitimately sleep for hours.
+
+
+def wait_until_free(repo: str, timeout_seconds: float, poll_seconds: float = 2.0) -> dict:
+    """Block until this repo is takeable, or until `timeout_seconds` runs out. Returns either way.
+
+    This exists because of a hole the pessimistic hold opened, and it is not a nicety. A refused
+    session cannot wait by itself: waiting means running `sleep`, `sleep` is a shell, and a shell
+    takes the lock — so the one thing a blocked session most needs to do is the one thing it is
+    blocked from doing. That is xag/repolock#4's cruellest detail ("`sleep` was also a write")
+    returning through the new door, and a lock that refuses you and then refuses to let you wait is
+    not a lock, it is a wall.
+
+    An MCP tool is the escape, because the hook does not gate MCP tools — it is how #4 was reported
+    at all, from a session that could not run a shell. The timeout is capped below MCP's idle
+    timeout so this returns an answer rather than dying silently and looking like a server hang.
+    """
+    repo = env.canonical(repo)
+    deadline = env.now() + max(0.0, float(timeout_seconds))
+    while True:
+        cur = _load(repo)
+        now = env.now()
+        if not cur or not _live(cur, now):
+            return {"status": "free", "repo": repo, "waited": True,
+                    "message": f"{repo} is free — the next write takes it, with a handoff."}
+
+        left = deadline - now
+        if left <= 0:
+            return {"status": "still_held", "repo": repo, "lock": asdict(cur),
+                    "expires_in": round(cur.expires_at - now, 1),
+                    "message": (f"Still held by session {cur.session} after the wait; its lease "
+                                f"has {round(cur.expires_at - now)}s left (activity renews it). "
+                                f"Wait again, or do something else and come back.")}
+
+        # Sleep to the lease's own expiry when that is sooner than the next poll: there is nothing
+        # to learn in between, and a lock that lapses is takeable the instant it does.
+        env.sleep(min(poll_seconds, left, max(0.1, cur.expires_at - now + 0.2)))
+
+
+def fingerprint(repo: str) -> str:
+    """What the working copy looks like right now, in one string.
+
+    This is the question that replaced the guess. v0.1 asked "does this command look like a write?"
+    — of a shell command, whose effect is not decidable from its text: `python codegen.py` writes,
+    `python check.py` does not, and nothing short of running them can say which. Both directions
+    failed in production (#4 blocked readers, #21 blocked a `print("a -> b")`, and `npm install`
+    was never seen at all).
+
+    So: no adapter classifies anything. It takes this before a tool runs and after, and a write is
+    a fingerprint that MOVED. That is an observation, not a prediction, and it cannot be wrong
+    about what a command did.
+
+    HEAD catches commits and rebases; the porcelain catches added, removed and staged files; the
+    stat of each dirty path catches a re-edit of a file that was already dirty (its status line does
+    not move, but its bytes do).
+
+    What it deliberately does not see: files git ignores. `node_modules` churning is not a change to
+    the working copy in any sense the next session cares about, and the lock exists to protect what
+    git tracks.
+    """
+    repo = env.canonical(repo)
+    parts = [env.git_head(repo) or "-"]
+    for line in env.git_dirty(repo):
+        parts.append(line)
+        path = line[3:].strip().strip('"').split(" -> ")[-1]   # porcelain: XY <path>[ -> <new>]
+        parts.append(str(env.file_stat(os.path.join(repo, path))))
+    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
 
 
 def drift(repo: str, seen_head: str | None) -> dict:

@@ -21,6 +21,13 @@ def now() -> float:
     return time.time()
 
 
+def sleep(seconds: float) -> None:
+    """Wait. On the boundary because it is nondeterministic, and because a wait that is not on the
+    tape is a wait nobody can replay: 'it hung' and 'it waited exactly as told' look identical
+    afterwards unless the sleep itself was recorded."""
+    time.sleep(max(0.0, seconds))
+
+
 def pid_alive(pid: int) -> bool:
     """Is that process still running? Answers the crashed-holder case.
 
@@ -59,6 +66,24 @@ def lock_dir() -> str:
     d = os.getenv("REPOLOCK_DIR") or os.path.join(os.path.expanduser("~"), ".repolock", "locks")
     os.makedirs(d, exist_ok=True)
     return d
+
+
+def disabled() -> bool:
+    """The panic switch: `~/.repolock/DISABLED` (or REPOLOCK_DISABLED=1) and every adapter becomes
+    a no-op that blocks nothing.
+
+    A file rather than only an env var, and checked on every hook call rather than at install time,
+    because the sessions you most need to free are the ones already running: a harness snapshots
+    its hooks at session start, so editing settings.json cannot reach them and neither can an env
+    var they were launched without. Touching a file can. Uninstalling should never require a
+    machine-wide restart of the work it is holding up.
+    """
+    value = os.getenv("REPOLOCK_DISABLED")
+    if value is not None:                 # an explicit setting wins, in BOTH directions: a test (or
+        return value.strip().lower() in ("1", "true", "on", "yes")   # a session) must be able to
+                                          # turn the lock back on without deleting the machine's
+                                          # panic file out from under everyone else.
+    return os.path.exists(os.path.join(os.path.dirname(lock_dir()), "DISABLED"))
 
 
 def recording() -> bool:
@@ -159,6 +184,20 @@ def git_dirty(repo: str) -> list[str]:
     """Porcelain lines for the working tree. Empty means clean, which is what release demands."""
     out = _run(["git", "status", "--porcelain"], cwd=repo)
     return [ln for ln in (out or "").splitlines() if ln.strip()]
+
+
+def file_stat(path: str) -> tuple[int, int] | None:
+    """(size, mtime_ns) for one path, or None if it is gone.
+
+    The reason the porcelain alone is not enough: a file that is already ` M` stays ` M` when it is
+    edited again, so the status line is identical across a write and the write goes unseen. The
+    stat moves every time the bytes do.
+    """
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (st.st_size, st.st_mtime_ns)
 
 
 def git_log_between(repo: str, base: str, head: str) -> list[str]:
