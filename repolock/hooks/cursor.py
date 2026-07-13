@@ -121,7 +121,7 @@ def pre_tool_use(p: dict) -> None:
         _out({"permission": "allow", **({"agent_message": "\n".join(notes)} if notes else {})})
 
     # A file-editing tool names its target. Prefer the repo that owns the FILE over the session's
-    # cwd (#22); fall back to cwd only when Cursor's payload does not carry a path.
+    # cwd (#8); fall back to cwd only when Cursor's payload does not carry a path.
     args = p.get("tool_input") or p.get("args") or {}
     path = args.get("file_path") or args.get("path") or args.get("target_file") or ""
     repo = common.repo_of(path) if path else None

@@ -12,7 +12,7 @@ Four events, and the split between the first two is the whole of v1 (see hooks/c
                live => exit 2, which blocks the tool and hands the reason back to the model.
 
                A shell says nothing we can trust. We do not read its command text — that guess was
-               wrong in both directions (#4, #21) and is not fixable. We refuse it only against a
+               wrong in both directions (#4, #7) and is not fixable. We refuse it only against a
                live holder with a dirty tree, take the before-fingerprint, and let it run.
 
   PostToolUse  the after-fingerprint. Moved => that tool wrote, as a fact; take the lock (and if
@@ -85,7 +85,7 @@ def _intent(payload: dict) -> str:
 
     Note carefully what this is NOT. The command text is recorded to be *shown to a human or another
     agent*. Nothing branches on it. The moment anything in this library decides something by reading
-    a command, we are back to #21 and #4 — see hooks/common.py.
+    a command, we are back to #7 and #4 — see hooks/common.py.
     """
     tool = payload.get("tool_name") or "tool"
     ti = payload.get("tool_input") or {}
@@ -103,7 +103,7 @@ def _target(payload: dict) -> tuple[str | None, bool]:
     """(repo, known_write). The repo a tool is about to act on, and whether we KNOW it writes.
 
     For a file-editing tool the repo comes from its own file_path — not from cwd, which is a
-    different repo often enough to matter (#22). For anything else it is the repo the session sits
+    different repo often enough to matter (#8). For anything else it is the repo the session sits
     in, and all we can say is that we do not know.
     """
     tool = payload.get("tool_name") or ""

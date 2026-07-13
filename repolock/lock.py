@@ -372,7 +372,7 @@ def fingerprint(repo: str) -> str:
     This is the question that replaced the guess. v0.1 asked "does this command look like a write?"
     — of a shell command, whose effect is not decidable from its text: `python codegen.py` writes,
     `python check.py` does not, and nothing short of running them can say which. Both directions
-    failed in production (#4 blocked readers, #21 blocked a `print("a -> b")`, and `npm install`
+    failed in production (#4 blocked readers, #7 blocked a `print("a -> b")`, and `npm install`
     was never seen at all).
 
     So: no adapter classifies anything. It takes this before a tool runs and after, and a write is

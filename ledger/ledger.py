@@ -122,7 +122,7 @@ DECISIONS = [
                   "not on the reader list. So the lists were inverted — name the writers, and the "
                   "unknown is a read. That was less wrong and still wrong.",
                   "killed_by":
-                  "xag/repolock#21 — `print(\"a -> b\")` was judged a redirect into a file named "
+                  "xag/repolock#7 — `print(\"a -> b\")` was judged a redirect into a file named "
                   "`b\")`, so a session that only read took the lock and could be refused one, on "
                   "a repo it was not touching. A quoting-aware parser was written, went green, and "
                   "was then killed by the test suite's own counterexample: `git log --format='%h "
@@ -153,18 +153,18 @@ DECISIONS = [
                   "`make`, `uv run ruff --fix`, `python codegen.py`, `./deploy.sh` all mutate the "
                   "tree and name nothing a list can hold — deciding whether an arbitrary program "
                   "writes means running it (#2). It called reads writes: a `>` inside a string, so "
-                  "a reading session took the lock and was refused one (#21, and #4 before it). So "
+                  "a reading session took the lock and was refused one (#7, and #4 before it). So "
                   "the adapter stops having opinions about commands. Where the harness declares the "
                   "target (Edit/Write/NotebookEdit carry a file_path) the lock is taken before the "
                   "write, on the repo that owns THAT PATH — not the session's cwd, which was a "
-                  "second bug (#22). Where it does not, the repo itself is the witness: a "
+                  "second bug (#8). Where it does not, the repo itself is the witness: a "
                   "fingerprint (HEAD + porcelain + the stat of every dirty path) before the tool "
                   "and after, and a write is a fingerprint that MOVED. An observation cannot be "
                   "wrong about what a command did."},
          children=[
              Node(id="alt-quoting-aware-parser", kind="alternative",
                   name="Keep the classifier, make it quoting-aware",
-                  payload={"why": "written, and green, before it was thrown away. It fixes the #21 "
+                  payload={"why": "written, and green, before it was thrown away. It fixes the #7 "
                                   "family and no other: being right requires knowing which shell "
                                   "will run the text and how that shell quotes. A gate that must "
                                   "interpret the shell is a shell"}),
@@ -272,7 +272,7 @@ DECISIONS = [
                   "does; the hook recognises its own token. Append one character — `&& rm -rf src` "
                   "— and it is a different string, matches nothing, and is gated like anything "
                   "else. Recognising your own token is not the same act as understanding someone "
-                  "else's command, and if that line ever blurs we are back in #21."},
+                  "else's command, and if that line ever blurs we are back in #7."},
          children=[
              Node(id="alt-blocking-wait-only", kind="alternative",
                   name="Only offer the blocking MCP wait",

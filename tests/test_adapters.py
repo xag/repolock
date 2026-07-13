@@ -78,7 +78,7 @@ def test_a_shell_that_writes_is_caught_whatever_it_is_called(repo, command):
     "git status --porcelain",
     "git log --oneline",
     "ls -la && cat a.txt",
-    # ...and #21: a `>` inside a string is not a redirect, an arrow is not a redirect, and no
+    # ...and #7: a `>` inside a string is not a redirect, an arrow is not a redirect, and no
     # amount of quoting-awareness was ever going to be the last bug in that parser.
     'echo "a -> b"',
     'grep -n "a > b" a.txt',
@@ -264,7 +264,7 @@ def test_a_read_gives_the_lock_back_even_when_the_tree_is_already_dirty(repo):
 
 
 def test_a_write_is_locked_on_the_repo_that_owns_the_file_not_the_cwd(tmp_path, repo, monkeypatch):
-    """#22: the session sits in one repo and edits another. The lock must land on the repo being
+    """#8: the session sits in one repo and edits another. The lock must land on the repo being
     WRITTEN, and a write to no repo at all must take no lock."""
     other = tmp_path / "other"
     other.mkdir()

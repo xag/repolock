@@ -9,7 +9,7 @@ mutating git verbs and mutating commands, a redirect regex, a segment splitter �
 in both directions, by construction:
 
   - it called reads writes. `print("a -> b")` was a redirect into a file named `b")`, so a session
-    doing nothing but reading took the lock, and could be refused one (#21). The same false-positive
+    doing nothing but reading took the lock, and could be refused one (#7). The same false-positive
     class had already locked a two-session fleet out of its own repos once (#4).
   - it called writes reads, and always will. `npm install`, `make`, `uv run ruff --fix`,
     `python scripts/codegen.py` name nothing a list can hold. Deciding whether an arbitrary program
@@ -27,7 +27,7 @@ Two things follow, and they are the whole design:
   1. Where the harness hands us GROUND TRUTH, we still prevent. `Edit`/`Write`/`NotebookEdit` carry
      the path they will write, so the repo is known exactly and the lock is taken *before* the
      write, as it always was. No parsing, and no cwd guess either — the lock goes on the repo that
-     owns the FILE, not the one the session happens to sit in (#22).
+     owns the FILE, not the one the session happens to sit in (#8).
   2. Where it does not — a shell — we do not pretend. We refuse only what is provably unsafe (a live
      holder with a dirty tree: walking into someone's half-finished edits is the founding incident),
      and we DETECT the write afterwards, claiming the lock the moment the tree moves. The honest
@@ -62,7 +62,7 @@ def ticket_for(session: str, repo: str) -> str:
     The hook compares it, byte for byte, against a string it wrote itself; append a single character
     — `... && rm -rf src` — and it is a different string, matches nothing, and is gated like any
     other shell. That distinction is the entire difference between this and the thing that has now
-    broken twice (#4, #21): recognising your own token is not the same act as understanding
+    broken twice (#4, #7): recognising your own token is not the same act as understanding
     someone else's command.
 
     Deterministic in (session, repo), so the refusal can print it and the next PreToolUse can
@@ -92,7 +92,7 @@ def repo_of(path: str) -> str | None:
     Keyed on the path, never on the session's cwd. A session sitting in `chores` that edits
     `../craft-laws/x.py` was, until now, taking the lock on `chores` and writing `craft-laws`
     unguarded — while a scratch file under %TEMP% took the lock on `chores` for a write that
-    touched no repo at all (#22). Both stop being possible when the target is derived from the
+    touched no repo at all (#8). Both stop being possible when the target is derived from the
     path.
     """
     if not path:

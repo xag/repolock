@@ -148,7 +148,7 @@ A harness adapter MUST:
      wrote itself**. That is a capability, not a classification: append one character and it is a
      different string, matches nothing, and is gated like any other command. Recognising your own
      token is not the same act as understanding someone else's command, and the distinction is what
-     keeps this from being #21 again;
+     keeps this from being #7 again;
 10. **fail open, loudly**: a crashing adapter must never wedge the machine — an unguarded write is
    bad, a laptop where nobody can edit anything is worse, and silent is worst;
 11. offer a **kill switch** that reaches sessions already running. A harness snapshots its hooks when
@@ -166,7 +166,7 @@ arbitrary program writes to a tree requires running it. No list closes this; the
 space of programs.
 
 *It called reads writes.* `print("a -> b")` was read as a redirect into a file named `b")`, so a
-session doing nothing but reading took the lock, and could be refused one (#21). A quoting-aware
+session doing nothing but reading took the lock, and could be refused one (#7). A quoting-aware
 parser does not save it either: `git log --format='%h -> %s'` is a read under a POSIX shell and a
 **write** under `cmd.exe`, where single quotes do not quote and the `>` redirects. The same text has
 opposite effects in two shells, so no parser can be correct about it without knowing which shell will

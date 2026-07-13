@@ -11,7 +11,7 @@ One developer, several AI agent sessions, one checkout.
 > shell command was a write **by reading it** — word lists of mutating commands, a redirect regex.
 > That gate locked *readers* out of their own repos ([#4](https://github.com/xag/repolock/issues/4)),
 > and then, after being fixed, did it again: a `>` inside a string
-> ([#21](https://github.com/xag/repolock/issues/21)) made `print("a -> b")` a redirect into a file,
+> ([#7](https://github.com/xag/repolock/issues/7)) made `print("a -> b")` a redirect into a file,
 > so a session that was only reading took the lock — and could be refused one — on a repo it wasn't
 > even touching.
 >
@@ -28,9 +28,15 @@ One developer, several AI agent sessions, one checkout.
 > mutex — and `Read`/`Grep`/`Glob` are never gated, so a refused session can always still inspect
 > the repo and see why. See SPEC §7b.
 >
+> A refused session is no longer left at a locked door with no sign on it. It is told what the
+> holder is doing, what it has touched, and what is still open — and it can **subscribe**: the gate
+> hands it a background waiter that dies when the lock frees, so its harness wakes it and it can go
+> and do other work in the meantime ([#5](https://github.com/xag/repolock/issues/5)). Waiting used
+> to be impossible: `sleep` is a shell command, and the shell is exactly what was refused
+> ([#4](https://github.com/xag/repolock/issues/4)).
+>
 > Still open: writes through MCP tools are not seen at all
-> ([#3](https://github.com/xag/repolock/issues/3)), and a blocked session has no good way to wait
-> ([#5](https://github.com/xag/repolock/issues/5)).
+> ([#3](https://github.com/xag/repolock/issues/3)).
 >
 > **The off switch, when it gets in your way:** `touch ~/.repolock/DISABLED` and every hook becomes a
 > no-op immediately — including in sessions already running, which snapshot their hooks at startup
