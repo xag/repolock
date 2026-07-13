@@ -2,6 +2,29 @@
 
 One developer, several AI agent sessions, one checkout.
 
+> ### ⚠️ Experimental, and it has already bitten
+>
+> This is a young protocol with a young implementation, and it sits on the write path of every
+> session on your machine. That is an unforgiving place for a bug.
+>
+> It has broken a working fleet once, in exactly the way you would least want: a change to the
+> write-detection gate made *reading* commands take the write lease
+> ([#4](https://github.com/xag/repolock/issues/4)), so sessions doing nothing but reading locked
+> out sessions that wanted to work. The blocked sessions could not inspect the repo, could not
+> wait out the lease, and could not file the bug — every escape route was itself a shell command,
+> and the shell was what was blocked. The gate is fixed and the four commands that caused it are
+> regression tests, but the shape of that failure is intrinsic to what this tool is: **when
+> repolock is wrong, it is wrong in the direction of stopping your work.**
+>
+> Known-open, and worth reading before you install: a mutating command nobody listed still writes
+> unguarded ([#2](https://github.com/xag/repolock/issues/2)); writes through MCP tools are not
+> gated at all ([#3](https://github.com/xag/repolock/issues/3)); and a blocked session has no
+> good way to wait ([#5](https://github.com/xag/repolock/issues/5)).
+>
+> If it does get in your way, the off switch is one edit — delete the `hooks` block from
+> `~/.claude/settings.json` (or `~/.cursor/hooks.json`) and everything returns to normal
+> immediately. Nothing is left behind in your repos; the lock records live outside them.
+
 Git assumes the working tree has one author. Run two agent sessions against the same clone and
 that assumption silently fails: sessions overwrite each other's edits, and — subtler — a session
 goes on *reasoning* about commits that a concurrent rebase has already destroyed. Nothing is
