@@ -108,54 +108,128 @@ return verdicts, never raise: an exception in a hook is a session that cannot ed
 
 A harness adapter MUST:
 
-1. gate every **write** — file-editing tools, and every shell command not proven to be a read
-   (§7a) — behind acquire-or-renew;
-2. block the write and surface the holder, lease, and intent when the verdict is `held`;
-3. surface the handoff verbatim on takeover;
-4. release-or-go-idle when the session returns control to the human;
-5. run the drift check when a session starts or resumes;
-6. gate **every shell the harness exposes**, not the one its authors use. A harness that offers
-   both `bash` and `powershell` and gates only the first is unguarded on the platform where the
-   second is the default.
-7. **fail open, loudly**: a crashing adapter must never wedge the machine — an unguarded write
-   is bad, a laptop where nobody can edit anything is worse, and silent is worst.
+1. **acquire before a write it is told about.** A file-editing tool names the file it will write.
+   That is ground truth: the adapter MUST acquire-or-renew before it runs, on the repo that owns
+   **that path** — never on the session's cwd, which is a different repo often enough to matter,
+   and is no repo at all when the target is a scratch file;
+2. **never guess about a write it is not told about.** For a shell — or any tool whose effect is not
+   declared — an adapter MUST NOT decide from the command text whether it writes (§7a). It MUST
+   instead observe the working copy before and after, and treat a **moved fingerprint** as the write
+   (§7b);
+3. block when the verdict is `held`, and say so in the terms obligation 8 sets out;
+4. surface the handoff verbatim on takeover;
+5. release-or-go-idle when the session returns control to the human;
+6. run the drift check when a session starts or resumes;
+7. cover **every shell the harness exposes**, not the one its authors use. A harness that offers both
+   `bash` and `powershell` and watches only the first is unguarded on the platform where the second
+   is the default;
+8. **make the refusal actionable.** A block MUST tell the refused session: what of ITS work was
+   refused; who holds the checkout and **what that holder is doing right now** (an intent refreshed
+   on every renewal — a stale one misleads the session reading it to decide whether to wait);
+   what the holder has already touched; when the lease frees, and that activity extends it; what is
+   **still permitted** (reading tools, every other repo); and **how to wait**. "Session 8663de9b
+   (Bash)" is an ID and a tool name, not information, and a session given only that will spin;
+9. **provide a way to wait through a channel it does not gate — and a way to wait that does not mean
+   waiting around.** This is not a nicety, it is a hole the lock itself opens: a refused session
+   cannot wait by itself, because waiting means running `sleep`, `sleep` is a shell, and the shell
+   is exactly what was refused. (This is xag/repolock#4's cruellest detail — "`sleep` was also a
+   write" — arriving through the new door.) An adapter that refuses a session and then refuses to
+   let it wait has not built a lock, it has built a wall. Two forms, and both are owed:
 
-## 7a. Write detection: name the write, or it is a read
+   - **block**, for a session with nothing else to do: the reference implementation exposes
+     `lock_wait` as an MCP tool, because the hook does not gate MCP tools — which is also the only
+     reason #4 could be reported at all, by sessions that could not run a shell;
+   - **subscribe**, for a session that has other work: an agent turn cannot be interrupted and
+     nothing can push into it, so the ONLY thing that can wake one is its harness noticing that a
+     background task it launched has exited. The adapter MUST therefore let a blocked session launch
+     a waiter that sleeps on the lock and dies when the lock frees. Since that waiter is itself a
+     shell — in the very repo the session is blocked from — the gate MUST issue it as a **one-time
+     ticket**: a command the gate mints, and then allows by **byte equality against the string it
+     wrote itself**. That is a capability, not a classification: append one character and it is a
+     different string, matches nothing, and is gated like any other command. Recognising your own
+     token is not the same act as understanding someone else's command, and the distinction is what
+     keeps this from being #7 again;
+10. **fail open, loudly**: a crashing adapter must never wedge the machine — an unguarded write is
+   bad, a laptop where nobody can edit anything is worse, and silent is worst;
+11. offer a **kill switch** that reaches sessions already running. A harness snapshots its hooks when
+   a session starts, so uninstalling by editing config cannot free the sessions that are stuck; a
+   file the adapter checks on every call can.
 
-An adapter MUST judge a shell command a write only when it can **point at the thing in it that
-writes** — a mutating git verb, a mutating command, a redirect into a file. A command it does not
-recognize is a **read**.
+## 7a. Write detection is not decidable, and MUST NOT be attempted
 
-**A false positive is not free, and an earlier draft of this document said it was.** That claim —
-"a false positive costs a lock you'd have taken anyway" — is the most expensive sentence this
-spec has contained, and implementations MUST NOT act on it. A false positive costs the *lease*,
-and the lease is the only resource in the protocol. The alternative design (enumerate the
-readers, treat the unknown as a write) was implemented and it broke a two-session fleet inside an
-hour: `cd repo && cat file` was judged a write because `cd` was not on the reader list, and a
-session that did nothing but read held the working copy for ten minutes against a session that
-wanted to change it. Sessions could not inspect, could not wait, and could not file the bug
-(xag/repolock#4).
+An adapter MUST NOT classify a shell command as a write or a read by reading it. **v0.1 required
+exactly that, and it was wrong in both directions — not by accident, but by construction.**
 
-The asymmetry is real but it points the other way. One unguarded write corrupts one tree, and the
-drift check (§6) exists to catch precisely that class of surprise. A gate that locks on reads
-stops **every session on the machine**, including the ones trying to diagnose it. Prefer the
-failure the protocol can still detect.
+*It called writes reads.* `npm install`, `make`, `uv run ruff --fix .`, `python scripts/codegen.py`,
+`./deploy.sh` all mutate the working copy and name nothing a list can hold. Deciding whether an
+arbitrary program writes to a tree requires running it. No list closes this; the tail is the whole
+space of programs.
 
-A conforming adapter therefore:
+*It called reads writes.* `print("a -> b")` was read as a redirect into a file named `b")`, so a
+session doing nothing but reading took the lock, and could be refused one (#7). A quoting-aware
+parser does not save it either: `git log --format='%h -> %s'` is a read under a POSIX shell and a
+**write** under `cmd.exe`, where single quotes do not quote and the `>` redirects. The same text has
+opposite effects in two shells, so no parser can be correct about it without knowing which shell will
+run it and how that shell quotes — at which point it is an interpreter, not a gate.
 
-- splits a command on every separator its shell honors (`&&`, `||`, `;`, `|`, newline) and judges
-  **each segment on its own** — `cd sub; git commit` is a commit, and a check keyed on the first
-  token of the whole command misses it;
-- resolves the command through the prefixes and options that hide it — `cd`, `sudo`, `VAR=value`,
-  an absolute path, `git -C sub commit`;
-- treats a redirect into a file as a write regardless of the command (`echo` is a read until it
-  is pointed at a file), excepting the non-file sinks (`/dev/null`, `$null`, `2>&1`);
-- treats an unrecognized command as a read.
+And a false positive is not free. That was the most expensive sentence this document ever contained.
+It costs the *lease*, which is the only resource in the protocol: a reader that takes the lock holds
+the working copy against a session that wants to change it, and a fleet where every session reads
+first is a fleet that locks itself out (#4).
 
-The tail this leaves open is real: a mutating command nobody listed writes unguarded. It is not
-closed by widening the list until it swallows the world. It is closed by asking a better
-question — not *"did a shell run?"* but *"did the repo change?"* — which an adapter can answer
-after the fact, from git itself, rather than by predicting it from a command line.
+## 7b. What replaces it: observe the repo, do not predict the command
+
+The right question is not *"was this a write?"* but *"did the repo change?"* — and that one is
+answered exactly, by looking.
+
+A **fingerprint** of a working copy is: its HEAD, plus its porcelain status, plus the size and mtime
+of every path the porcelain names. (The stat is load-bearing: a file that is already ` M` stays ` M`
+when it is edited again — the status line does not move, but the bytes do. Files git ignores are
+deliberately not seen; the lock protects what git tracks.)
+
+An adapter MUST:
+
+- **take the lock before running a tool whose effect it was not told** — a shell — without forming
+  any opinion about what the command does. Not because it is believed to write: because acquiring is
+  how you find out safely. A live holder in the way means `held`, and the tool is refused;
+- take the **fingerprint** at that moment, and again once the tool returns;
+- *unmoved* => it read, whatever it looked like. **Release the lock immediately.** A reader holds the
+  working copy for the duration of its own command and not one second longer;
+- *moved* => it wrote. Keep the lock, and hold it while the session stays active — exactly as a
+  declared write does. Nobody had to recognise `./deploy.sh` for this to be true.
+
+### A backgrounded tool MUST NOT be settled by observation
+
+A task the harness runs in the background **returns immediately**: the tool call hands back a task
+id, the "after" hook fires at *launch*, and the fingerprint has not moved — because the command has
+not done anything yet. An adapter that settles on that picture will release the lock and let the
+process write the working copy unguarded for as long as it runs (`npm run dev`, a test watcher, a
+build). There is nothing to observe, and observing anyway is worse than not looking: it produces a
+confident wrong answer.
+
+So: when the harness **declares** a task backgrounded (a field in the tool input — a fact, not a
+command to be read), the adapter MUST hold the lock and MUST NOT settle it. The lease and the
+session's own activity carry it, and the idle boundary (§5) decides at the end. An adapter that
+cannot see the end of a thing it started must not pretend it has.
+
+The release of an unneeded lock MUST NOT be refused by a dirty tree. The dirty-tree refusal (§5)
+guards the *idle boundary*; here the fingerprint proves this session changed nothing, and holding a
+checkout hostage over someone else's uncommitted work, having written nothing, is #4 with a hat on.
+
+### What this costs, and what it does not
+
+Two sessions cannot run shell commands against one checkout at the same instant. That is not a
+defect in a mutex; it is a mutex. The cost is bounded by the length of the command they collided
+with, and it is emphatically **not** #4: #4's disease was a reader minting a ten-minute *lease* and
+holding the repo while it did nothing. Reading tools that are not shells (`Read`, `Grep`, `Glob`)
+are not gated at all, so a refused session can always still inspect the repo and diagnose the
+refusal — the escape route #4's victims did not have.
+
+An earlier draft of v1 did NOT hold through the unknown: it detected shell writes only afterwards
+and *reported* a collision it had failed to prevent. That leaves a window, reachable by
+construction, in which two sessions write one checkout — and a known-reachable hole in a mutex is
+not a residual risk, it is the absence of the mutex on that path. It was rejected. An adapter MUST
+NOT implement it.
 
 ## Non-goals
 
@@ -166,3 +240,15 @@ after the fact, from git itself, rather than by predicting it from a command lin
   worktree, that is the better answer; this convention covers what worktrees don't reach —
   interactive sessions deliberately pointed at the same checkout, mixed-vendor fleets, and the
   stale-reader drift check.
+- **Not a lock between a session and its own subagents, and this is deliberate.** A subagent's tool
+  calls reach the hook carrying the **parent's** session id (verified against a real run, not
+  assumed). Acquire is reentrant, so a parent that holds the lock *renews* when its child writes.
+
+  It has to be this way. If a subagent had an id of its own, a parent holding the lock would refuse
+  its own child **while blocking on that child's result** — not contention but a deadlock, and one
+  that neither a wait nor a ticket can break, because the holder is the very thing being waited for.
+
+  The price: a session and all its subagents are **one holder**, so the convention does not
+  arbitrate between two subagents of the same session running in parallel against one checkout.
+  That is the harness's problem, and the harness has the better answer for it (give each agent its
+  own worktree). A lock cannot fix intra-session concurrency without deadlocking on it.

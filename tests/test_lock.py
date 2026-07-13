@@ -85,6 +85,20 @@ def test_a_second_session_is_held_out(repo):
 
 
 def test_acquire_is_reentrant_so_a_session_never_deadlocks_against_itself(repo):
+    """Load-bearing, and for a reason that is not obvious from here: THE SUBAGENT.
+
+    A session spawns subagents, and a subagent's tool calls reach the hook with the PARENT's
+    session_id — verified against a real headless run, not assumed. So when a parent holds the lock
+    and its child writes, this is the code path that runs, and it must renew rather than refuse.
+
+    If a subagent ever got an id of its own, a parent holding the lock would refuse its own child
+    while blocking on that child's result: not contention, a deadlock, and one that neither the
+    ticket nor lock_wait can break because the holder is the very thing being waited for. That
+    would be fatal, and this single line is what stands between us and it.
+
+    The price is stated in SPEC (Non-goals): sharing the id means the lock does NOT arbitrate
+    between two PARALLEL subagents of one session. They are one holder, by construction.
+    """
     lock.acquire(repo, "A", LIVE_PID, 600)
     assert lock.acquire(repo, "A", LIVE_PID, 600)["status"] == "renewed"
 

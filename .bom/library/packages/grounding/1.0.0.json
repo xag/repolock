@@ -1,0 +1,57 @@
+{
+  "name": "grounding",
+  "version": "1.0.0",
+  "description": "Contracts over the provenance atom, so a rule can ask whether a number is safe to act on: untrusted(path, tol) counts the params that are not grounded (or grounded too loosely); untrusted_via(path, rel, tol) asks it of whatever a node links to — the reality a design is fitted against; depends_untrusted(path, tol) follows derived_from lineage, because a computed value is only as good as its inputs. Grounding is the substrate's one fixed epistemic verb; the provenance *label* stays a domain's own word.",
+  "publisher": "standard library",
+  "requires": [],
+  "vocabulary": [
+    {
+      "kind": "grounding",
+      "description": "Convention pack, not a node kind: every Quantity already carries `grounded` and `tolerance`. These contracts only read them — count what a branch, its links, or its lineage rests on that is not an observation.",
+      "params": {},
+      "links": {},
+      "operations": {}
+    }
+  ],
+  "rules": [],
+  "solvers": [
+    {
+      "name": "grounding/untrusted",
+      "description": "standard grounding contract; see the package description",
+      "blob": "",
+      "medium": "wasm",
+      "native": true,
+      "reads": [
+        ""
+      ],
+      "params_doc": {},
+      "fuel": 500000000
+    },
+    {
+      "name": "grounding/untrusted_via",
+      "description": "standard grounding contract; see the package description",
+      "blob": "",
+      "medium": "wasm",
+      "native": true,
+      "reads": [
+        ""
+      ],
+      "params_doc": {},
+      "fuel": 500000000
+    },
+    {
+      "name": "grounding/depends_untrusted",
+      "description": "standard grounding contract; see the package description",
+      "blob": "",
+      "medium": "wasm",
+      "native": true,
+      "reads": [
+        ""
+      ],
+      "params_doc": {},
+      "fuel": 500000000
+    }
+  ],
+  "examples": [],
+  "counter_examples": []
+}

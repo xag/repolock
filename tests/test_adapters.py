@@ -2,8 +2,13 @@
 
 Each adapter is a subprocess fed the harness's own JSON — exactly what the harness does — and
 judged on what the harness would see: exit codes and stderr for Claude Code, JSON verdicts on
-stdout for Cursor. The last test is the one the README stakes its value on: a lock taken
-through one vendor's hook holds out a session arriving through the other's.
+stdout for Cursor.
+
+The contract these tests hold the adapters to changed in v1, and the change is the point. They no
+longer assert what a COMMAND was judged to be — that judgement is gone, because it could not be
+made correctly. They assert what the REPO did. A shell that writes must be caught whatever it is
+spelled; a shell that reads must cost nothing, whatever it is spelled; and neither claim depends on
+anyone recognising the command.
 """
 
 import json
@@ -12,8 +17,6 @@ import subprocess
 import sys
 
 import pytest
-
-from repolock.hooks.common import shell_writes
 
 CLAUDE = os.path.join(os.path.dirname(__file__), "..", "repolock", "hooks", "claude_code.py")
 CURSOR = os.path.join(os.path.dirname(__file__), "..", "repolock", "hooks", "cursor.py")
@@ -25,99 +28,271 @@ def run_hook(script, payload):
     return res
 
 
-def claude_edit(repo, session):
+def claude_edit(repo, session, path="a.txt"):
+    """A file-editing tool: it names the file it will write, so the lock is taken before it runs."""
     return run_hook(CLAUDE, {"hook_event_name": "PreToolUse", "tool_name": "Edit",
-                             "tool_input": {}, "cwd": repo, "session_id": session})
+                             "tool_input": {"file_path": os.path.join(repo, path)},
+                             "cwd": repo, "session_id": session})
 
 
 def claude_shell(repo, session, command, tool="Bash"):
-    return run_hook(CLAUDE, {"hook_event_name": "PreToolUse", "tool_name": tool,
-                             "tool_input": {"command": command}, "cwd": repo,
-                             "session_id": session})
+    """A shell, run the way the harness runs one: PreToolUse, then the command, then PostToolUse.
+
+    The command is actually EXECUTED between the two hooks — which is the whole design. Nothing
+    reads its text; the hooks look at the repo before and after and see what it did.
+    """
+    payload = {"tool_name": tool, "tool_input": {"command": command},
+               "cwd": repo, "session_id": session}
+    pre = run_hook(CLAUDE, {**payload, "hook_event_name": "PreToolUse"})
+    if pre.returncode != 0:
+        return pre                                  # blocked before it ran
+    subprocess.run(command, cwd=repo, shell=True, capture_output=True)
+    return run_hook(CLAUDE, {**payload, "hook_event_name": "PostToolUse"})
 
 
-# --- write detection: the writers are the list, and every segment is judged (SPEC.md §7a) -------
-
-@pytest.mark.parametrize("command", [
-    "git commit -m x",                  # the obvious one
-    "cd sub; git commit -m x",          # `;` is a separator too — a first-token check misses this
-    "cd sub && git rebase -i main",     # and `&&`, with the write in the second segment
-    "git -C sub commit -m x",           # a global option that eats the token after it
-    "sed -i s/x/y/ a.txt",              # a mutation with no git in sight
-    "echo hi > a.txt",                  # a reader, pointed at a file
-    "cat a.txt | tee b.txt",            # the write is in the second pipeline stage
-    "rm -rf src",
-    "Set-Content a.txt hello",          # PowerShell's spelling of the same thing
-    "cd repo && Remove-Item -Recurse src",
-])
-def test_these_are_writes(command):
-    assert shell_writes(command) is True
-
+# --- write DETECTION: the repo is the witness, not the command (SPEC.md §7a) --------------------
 
 @pytest.mark.parametrize("command", [
-    # Every one of these was REFUSED by the reader-allowlist gate, in a real session, on a repo
-    # it had every right to read. They are the regression suite for #4: a lock that stops these
-    # is not a conservative lock, it is a broken one.
-    "cd C:/Users/x/Projects/korean-gpt-coach && cat .dockerignore",
-    "cd C:/Users/x/Projects/korean-gpt-coach && git status --porcelain",
-    "cd C:/Users/x/AppData/Local/Temp/scratch",
-    "gh issue view 4 -R xag/repolock --json number,title",
-    "sleep 440",                        # the session's own attempt to wait out the lease
-    # and the ordinary reads
-    "git log --oneline",
-    "git diff HEAD~1 | grep foo",
-    "ls -la && cat a.txt",
-    "grep -rn x . > /dev/null",         # the non-file sink is not a write
-    "git show HEAD 2>&1",
-    "pytest -q",                        # drops a cache dir; does not touch the working copy
-    "Get-Content a.txt | Select-String x",
-    "",
+    "git commit --allow-empty -m x",     # the obvious one
+    "sed -i s/one/two/ a.txt",           # a mutation with no git in it
+    "echo hi > b.txt",                   # a redirect
+    "rm a.txt",                          # a delete
+    # ...and the ones NO classifier can catch, because their effect is not in their text. Each of
+    # these was invisible to v0.1 and wrote the tree unguarded.
+    "python -c \"open('gen.py','w').write('x')\"",       # codegen, arbitrary program
+    "sh -c 'printf hi >> a.txt'",                        # a write one indirection away
+    "git stash list && echo x > c.txt",                  # the write is in the second segment
 ])
-def test_these_are_reads(command):
-    assert shell_writes(command) is False
-
-
-# --- Claude Code (adapter #1) ---------------------------------------------------
-
-def test_claude_gates_a_powershell_write_like_any_other(repo):
-    """#1: on Windows PowerShell is the shell that runs. It is a tool name like any other, and
-    the hook must not care which one it was."""
-    assert claude_shell(repo, "A", "Set-Content a.txt hello", tool="PowerShell").returncode == 0
-    res = claude_shell(repo, "B", "Set-Content a.txt hello", tool="PowerShell")
-    assert res.returncode == 2
+def test_a_shell_that_writes_is_caught_whatever_it_is_called(repo, command):
+    """The false-NEGATIVE half of the old bug, closed. No list, no regex, no guess: the tree moved,
+    so the session is a writer, so it holds the lock."""
+    assert claude_shell(repo, "A", command).returncode == 0
+    res = claude_edit(repo, "B")
+    assert res.returncode == 2, f"A wrote the repo with {command!r} and never took the lock"
     assert "session A" in res.stderr
 
 
-def test_claude_gates_a_plain_shell_write_with_no_git_in_it(repo):
-    """#2: `sed -i` mutates the working copy exactly as `git commit` does."""
-    assert claude_shell(repo, "A", "sed -i s/one/two/ a.txt").returncode == 0
-    assert claude_shell(repo, "B", "sed -i s/one/two/ a.txt").returncode == 2
-
-
-def test_claude_leaves_a_reading_shell_command_unlocked(repo):
-    """The other half of the claim: reads must stay free, or every session locks every repo."""
-    assert claude_shell(repo, "A", "git log --oneline").returncode == 0
-    assert claude_edit(repo, "B").returncode == 0          # A never took the lock
-
-
-def test_a_reading_session_never_takes_the_lease(repo):
-    """#4, as a test. Session A reads the repo the way a session actually reads a repo — `cd` into
-    it, cat a file, check status, ask GitHub something. None of it may cost B the working copy."""
-    for command in ("cd . && cat a.txt",
-                    "cd . && git status --porcelain",
-                    "gh issue view 4 -R xag/repolock",
-                    "sleep 1"):
-        assert claude_shell(repo, "A", command).returncode == 0, command
-
+@pytest.mark.parametrize("command", [
+    # Every one of these was REFUSED, in a real session, on a repo it had every right to read (#4)
+    "cat a.txt",
+    "git status --porcelain",
+    "git log --oneline",
+    "ls -la && cat a.txt",
+    # ...and #7: a `>` inside a string is not a redirect, an arrow is not a redirect, and no
+    # amount of quoting-awareness was ever going to be the last bug in that parser.
+    'echo "a -> b"',
+    'grep -n "a > b" a.txt',
+    "python -c \"print(1 > 0)\"",
+])
+def test_a_shell_that_only_reads_costs_nothing(repo, command):
+    """The false-POSITIVE half, closed by the same mechanism. A read leaves no trace in the repo, so
+    it takes no lock — and B is never locked out by a session that only looked."""
+    assert claude_shell(repo, "A", command).returncode == 0
     res = claude_edit(repo, "B")
     assert res.returncode == 0, (
         f"a session that only read the repo took the lease and locked B out:\n{res.stderr}")
 
 
-def cursor_write(repo, conversation):
-    return run_hook(CURSOR, {"hook_event_name": "preToolUse", "tool_name": "Write",
-                             "tool_input": {}, "cwd": repo,
-                             "conversation_id": conversation, "workspace_roots": [repo]})
+def test_the_same_text_is_a_read_in_one_shell_and_a_write_in_another(repo):
+    """The last nail in the classifier's coffin, and it turned up by accident in this suite.
+
+    `git log --format='%h -> %s'` is a read under a POSIX shell: the `>` is inside quotes. Under
+    cmd.exe, single quotes do not quote, so the `>` redirects and the command CREATES A FILE. The
+    same text, two shells, opposite effects — so no parser can be right about it, not even a
+    quoting-aware one, because it would have to know which shell was going to run it and how that
+    shell quotes. Observation does not have to know any of that."""
+    res = claude_shell(repo, "A", "git log --format='%h -> %s'")
+    assert res.returncode == 0
+    wrote = subprocess.run(["git", "status", "--porcelain"], cwd=repo,
+                           capture_output=True, text=True).stdout.strip()
+    if wrote:                                    # cmd.exe: it redirected, so it is a writer
+        assert claude_edit(repo, "B").returncode == 2
+    else:                                        # a POSIX shell: it read, so it took nothing
+        assert claude_edit(repo, "B").returncode == 0
+
+
+def test_a_shell_cannot_write_into_a_repo_someone_else_holds(repo):
+    """The window, CLOSED — and this is the test that says so.
+
+    An earlier draft of v1 detected shell writes only afterwards, which left a gap: within one tool
+    call, two sessions could both write one checkout. That gap was written into the ledger as a
+    'hypothesis' with a falsifier that would fire the first time it cost someone their work — which
+    is not a hypothesis, it is a hole with an alibi. A shell now takes the lock BEFORE it runs, so
+    the second session never gets to write at all."""
+    assert claude_edit(repo, "A").returncode == 0                     # A holds the lock
+    res = claude_shell(repo, "B", "echo hi > b.txt")                  # B tries to write
+    assert res.returncode == 2                                        # ...and never runs
+    assert "REPO LOCKED" in res.stderr
+    assert not os.path.exists(os.path.join(repo, "b.txt")), "B's write was not prevented"
+
+
+def test_the_refusal_tells_a_blocked_session_what_it_needs_to_act(repo):
+    """A gate that stops you without saying what it is waiting for, what you may still do, or how to
+    wait, leaves an agent rattling the handle of a door with no sign on it. The refusal must carry
+    all three, or it is just a wall."""
+    assert claude_shell(repo, "A", "echo one > b.txt").returncode == 0     # A becomes the writer
+    res = run_hook(CLAUDE, {"hook_event_name": "PreToolUse", "tool_name": "Edit",
+                            "tool_input": {"file_path": os.path.join(repo, "a.txt")},
+                            "cwd": repo, "session_id": "B"})
+    assert res.returncode == 2
+    err = res.stderr
+
+    assert "session A" in err                        # who
+    assert "b.txt" in err                            # ...and what they have actually touched
+    assert "Edit a.txt" in err                       # what of MINE was refused
+    assert "frees in" in err                         # when it frees
+    assert "Read / Grep / Glob" in err               # what I may still do
+    assert "lock_wait" in err                        # ...and how to wait, since `sleep` is blocked
+    assert "sleep" in err                            # named explicitly: it is the trap
+
+
+def test_the_refusal_reports_what_the_holder_is_doing_NOW(repo):
+    """A stale intent is worse than none: it is the field a refused session reads to decide whether
+    to wait ten seconds or leave, so a holder still advertised as 'Edit server.py' an hour after it
+    moved on to a test run is actively lying to the session it is blocking."""
+    claude_edit(repo, "A", path="a.txt")                                # A takes the lock editing
+    assert claude_shell(repo, "A", "git log --oneline").returncode == 0  # ...then does something else
+
+    res = claude_edit(repo, "B")
+    assert res.returncode == 2
+    assert "git log" in res.stderr, "the refusal still advertises the holder's FIRST action"
+
+
+def test_a_blocked_session_can_wait_because_sleep_is_not_available_to_it(repo):
+    """The hole the pessimistic hold opened, closed. `sleep` is a shell; the shell is what was
+    refused; so waiting has to be reachable through a channel the hook does not gate."""
+    from repolock import lock
+
+    assert claude_shell(repo, "A", "echo one > b.txt").returncode == 0
+    assert claude_shell(repo, "B", "sleep 1").returncode == 2, "B cannot even wait via the shell"
+
+    # ...so it waits through the ungated channel instead. A's lock is live, so this times out
+    # rather than lying, and it says how much lease is left.
+    v = lock.wait_until_free(repo, timeout_seconds=1, poll_seconds=0.2)
+    assert v["status"] == "still_held"
+    assert "left" in v["message"]
+
+    run_hook(CLAUDE, {"hook_event_name": "Stop", "cwd": repo, "session_id": "A"})  # A commits/leaves
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "b"], cwd=repo, check=True)
+    run_hook(CLAUDE, {"hook_event_name": "Stop", "cwd": repo, "session_id": "A"})
+
+    v = lock.wait_until_free(repo, timeout_seconds=5, poll_seconds=0.2)
+    assert v["status"] == "free"
+    assert claude_edit(repo, "B").returncode == 0     # and B may now proceed
+
+
+def test_a_backgrounded_task_keeps_the_lock_because_its_writes_have_not_happened_yet(repo):
+    """The hole that observation-after-the-fact would otherwise have shipped.
+
+    A backgrounded command returns IMMEDIATELY — the harness hands back a task id and PostToolUse
+    fires at LAUNCH. The fingerprint has not moved, because the command has not done anything yet.
+    Settling on that would release the lock and let `npm run dev` write the tree unguarded for the
+    next hour. The harness declares `run_in_background`, so we hold instead of guessing."""
+    pre = run_hook(CLAUDE, {"hook_event_name": "PreToolUse", "tool_name": "Bash",
+                            "tool_input": {"command": "npm run dev", "run_in_background": True},
+                            "cwd": repo, "session_id": "A"})
+    assert pre.returncode == 0
+    post = run_hook(CLAUDE, {"hook_event_name": "PostToolUse", "tool_name": "Bash",
+                             "tool_input": {"command": "npm run dev", "run_in_background": True},
+                             "cwd": repo, "session_id": "A"})
+    assert post.returncode == 0
+    assert "background" in post.stdout.lower()
+
+    res = claude_edit(repo, "B")
+    assert res.returncode == 2, "the lock was released under a live background process"
+
+
+def test_the_refusal_issues_a_ticket_that_lets_the_blocked_session_subscribe(repo):
+    """A blocked session cannot run ANY shell here — including the background waiter that would let
+    it get on with something else. So the gate mints the one command it will allow, and allows that
+    string and nothing else."""
+    from repolock.hooks import common
+
+    assert claude_shell(repo, "A", "echo one > b.txt").returncode == 0     # A becomes the writer
+    res = claude_edit(repo, "B")
+    assert res.returncode == 2
+
+    ticket = common.ticket_for("B", repo)
+    assert ticket in res.stderr, "the refusal did not hand the session a way to subscribe"
+
+    # The ticket runs, in the background, in the repo B is locked out of.
+    ok = run_hook(CLAUDE, {"hook_event_name": "PreToolUse", "tool_name": "Bash",
+                           "tool_input": {"command": ticket, "run_in_background": True},
+                           "cwd": repo, "session_id": "B"})
+    assert ok.returncode == 0, "the session cannot run the waiter the gate itself issued"
+
+    # ...and it is a capability, not a licence. One character more and it is a different string.
+    for forged in (ticket + " && rm -rf src", ticket.replace("--ticket", "--x"),
+                   common.ticket_for("SOMEONE-ELSE", repo)):
+        bad = run_hook(CLAUDE, {"hook_event_name": "PreToolUse", "tool_name": "Bash",
+                                "tool_input": {"command": forged}, "cwd": repo, "session_id": "B"})
+        assert bad.returncode == 2, f"a forged ticket got through: {forged!r}"
+
+
+def test_the_waiter_exits_when_the_lock_frees(repo):
+    """What the harness wakes the session on: the process must actually die when the lock goes."""
+    from repolock import waitfor
+
+    assert claude_shell(repo, "A", "echo one > b.txt").returncode == 0
+    assert waitfor.main([repo, "--timeout", "1"]) == 1        # still held: exits non-zero, says so
+
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "b"], cwd=repo, check=True)
+    run_hook(CLAUDE, {"hook_event_name": "Stop", "cwd": repo, "session_id": "A"})
+
+    assert waitfor.main([repo, "--timeout", "5"]) == 0        # freed: exits 0 -> the harness wakes B
+
+
+def test_a_read_hands_the_speculative_lock_straight_back(repo):
+    """What makes the pessimistic hold affordable, and keeps it from becoming #4.
+
+    A shell takes the lock without anyone judging the command — but a shell that turns out to have
+    read holds it for its own tool call and not one second longer."""
+    assert claude_shell(repo, "A", "cat a.txt").returncode == 0
+    assert claude_edit(repo, "B").returncode == 0, "a read kept the lock it took on speculation"
+
+
+def test_a_read_gives_the_lock_back_even_when_the_tree_is_already_dirty(repo):
+    """The release must not be refused by dirt this session did not make. `release` normally guards
+    the idle boundary by refusing a dirty tree; here the fingerprint proves we changed nothing, so
+    holding the repo hostage over someone else's uncommitted work would be #4 in a hat."""
+    with open(os.path.join(repo, "a.txt"), "w") as f:
+        f.write("someone else's half-finished work")
+    assert claude_shell(repo, "A", "cat a.txt").returncode == 0
+    assert claude_edit(repo, "B").returncode == 0
+
+
+def test_a_write_is_locked_on_the_repo_that_owns_the_file_not_the_cwd(tmp_path, repo, monkeypatch):
+    """#8: the session sits in one repo and edits another. The lock must land on the repo being
+    WRITTEN, and a write to no repo at all must take no lock."""
+    other = tmp_path / "other"
+    other.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=other, check=True)
+    (other / "b.txt").write_text("x")
+
+    # session A, cwd=repo, edits a file in `other`
+    res = run_hook(CLAUDE, {"hook_event_name": "PreToolUse", "tool_name": "Edit",
+                            "tool_input": {"file_path": str(other / "b.txt")},
+                            "cwd": str(repo), "session_id": "A"})
+    assert res.returncode == 0
+
+    assert claude_edit(repo, "B").returncode == 0            # `repo` was never locked...
+    res = run_hook(CLAUDE, {"hook_event_name": "PreToolUse", "tool_name": "Edit",
+                            "tool_input": {"file_path": str(other / "b.txt")},
+                            "cwd": str(other), "session_id": "C"})
+    assert res.returncode == 2                               # ...`other` was
+    assert "session A" in res.stderr
+
+
+def test_a_write_outside_every_repo_takes_no_lock(repo, tmp_path):
+    """A scratch file under %TEMP% is not a working copy. It used to take the lock on whatever repo
+    the session was sitting in, and could be refused one."""
+    assert claude_edit(repo, "A").returncode == 0
+    res = run_hook(CLAUDE, {"hook_event_name": "PreToolUse", "tool_name": "Write",
+                            "tool_input": {"file_path": str(tmp_path / "scratch" / "notes.md")},
+                            "cwd": str(tmp_path), "session_id": "B"})
+    assert res.returncode == 0
 
 
 # --- Claude Code (adapter #1) ---------------------------------------------------
@@ -130,6 +305,15 @@ def test_claude_hook_takes_the_lock_and_holds_out_a_second_session(repo):
     assert "session A" in res.stderr
 
 
+def test_claude_gates_a_powershell_write_like_any_other(repo):
+    """#1: on Windows PowerShell is the shell that runs. It is a tool name like any other, and the
+    hook must not care which one it was — nor read its command."""
+    assert claude_shell(repo, "A", "echo hi > b.txt", tool="PowerShell").returncode == 0
+    res = claude_edit(repo, "B")
+    assert res.returncode == 2
+    assert "session A" in res.stderr
+
+
 def test_claude_stop_releases_a_clean_tree(repo):
     claude_edit(repo, "A")
     res = run_hook(CLAUDE, {"hook_event_name": "Stop", "cwd": repo, "session_id": "A"})
@@ -137,7 +321,57 @@ def test_claude_stop_releases_a_clean_tree(repo):
     assert claude_edit(repo, "B").returncode == 0   # free again
 
 
+def test_claude_fails_open_on_garbage_input(repo):
+    res = subprocess.run([sys.executable, CLAUDE], input="not json",
+                         capture_output=True, text=True, timeout=60)
+    assert res.returncode == 0
+
+
+def test_a_missing_flight_recorder_costs_the_tape_not_the_lock(repo, tmp_path, monkeypatch):
+    """`flight-recorder` is an OPTIONAL extra and recording is ON by default, so a plain
+    `pip install .` has no recorder. The ImportError used to travel up into the fail-open handler
+    and no-op every hook: the lock looked installed, printed one line to a stderr nobody reads, and
+    guarded nothing. An optional dependency that silently disables the tool when absent is not
+    optional — it is a hard dependency with a bug."""
+    stub = tmp_path / "no_recorder"
+    stub.mkdir()
+    (stub / "flight_recorder.py").write_text("raise ImportError('not installed')")
+
+    env = dict(os.environ, REPOLOCK_DISABLED="0", REPOLOCK_DIR=str(tmp_path / "locks"),
+               PYTHONPATH=str(stub))
+    def hook(session):
+        p = {"hook_event_name": "PreToolUse", "tool_name": "Edit",
+             "tool_input": {"file_path": os.path.join(repo, "a.txt")},
+             "cwd": repo, "session_id": session}
+        return subprocess.run([sys.executable, CLAUDE], input=json.dumps(p), env=env,
+                              capture_output=True, text=True)
+
+    assert hook("A").returncode == 0
+    res = hook("B")
+    assert res.returncode == 2, "with no recorder installed, the lock stopped locking entirely"
+
+
+def test_the_kill_switch_stops_every_event(repo, tmp_path, monkeypatch):
+    """A lock you cannot switch off is worse than no lock. The file reaches sessions that already
+    snapshotted their hooks — the ones you most need to free."""
+    env = dict(os.environ, REPOLOCK_DISABLED="1", REPOLOCK_DIR=str(tmp_path / "locks"))
+    payload = {"hook_event_name": "PreToolUse", "tool_name": "Edit",
+               "tool_input": {"file_path": os.path.join(repo, "a.txt")},
+               "cwd": repo, "session_id": "A"}
+    assert subprocess.run([sys.executable, CLAUDE], input=json.dumps(payload), env=env,
+                          capture_output=True, text=True).returncode == 0
+    payload["session_id"] = "B"
+    assert subprocess.run([sys.executable, CLAUDE], input=json.dumps(payload), env=env,
+                          capture_output=True, text=True).returncode == 0   # nobody is ever blocked
+
+
 # --- Cursor (adapter #2) --------------------------------------------------------
+
+def cursor_write(repo, conversation, path="a.txt"):
+    return run_hook(CURSOR, {"hook_event_name": "preToolUse", "tool_name": "Write",
+                             "tool_input": {"file_path": os.path.join(repo, path)}, "cwd": repo,
+                             "conversation_id": conversation, "workspace_roots": [repo]})
+
 
 def test_cursor_hook_takes_the_lock_and_denies_a_second_conversation(repo):
     res = cursor_write(repo, "conv-1")
@@ -151,17 +385,18 @@ def test_cursor_hook_takes_the_lock_and_denies_a_second_conversation(repo):
     assert "conv-1" in verdict["agent_message"]
 
 
-def test_cursor_gates_writing_git_shell_commands_but_not_reads(repo):
-    res = run_hook(CURSOR, {"hook_event_name": "beforeShellExecution", "cwd": repo,
-                            "conversation_id": "conv-1", "command": "git commit -m x"})
-    assert json.loads(res.stdout)["permission"] == "allow"   # took the lock
+def test_cursor_detects_a_shell_write_at_the_next_event(repo):
+    """Cursor's post-tool event is not verified against the real client, so this adapter reconciles
+    lazily — the write is discovered on the way into the next hook call, not immediately."""
+    before = {"hook_event_name": "beforeShellExecution", "cwd": repo,
+              "conversation_id": "conv-1", "command": "echo hi > b.txt", "workspace_roots": [repo]}
+    assert json.loads(run_hook(CURSOR, before).stdout)["permission"] == "allow"
+    subprocess.run("echo hi > b.txt", cwd=repo, shell=True)
 
-    res = run_hook(CURSOR, {"hook_event_name": "beforeShellExecution", "cwd": repo,
-                            "conversation_id": "conv-2", "command": "git log --oneline"})
-    assert json.loads(res.stdout)["permission"] == "allow"   # read-only: never locked...
-
-    res = cursor_write(repo, "conv-2")
-    assert json.loads(res.stdout)["permission"] == "deny"    # ...so conv-1 still holds it
+    run_hook(CURSOR, {**before, "command": "cat a.txt"})        # next event: catches up, locks
+    verdict = json.loads(cursor_write(repo, "conv-2").stdout)
+    assert verdict["permission"] == "deny"
+    assert "conv-1" in verdict["agent_message"]
 
 
 def test_cursor_stop_releases_every_clean_workspace_root(repo):
@@ -202,10 +437,3 @@ def test_a_lock_taken_in_one_harness_binds_the_other(repo):
     verdict = json.loads(cursor_write(repo, "cursor-conv").stdout)
     assert verdict["permission"] == "deny"
     assert "claude-session" in verdict["agent_message"]
-
-    # and the other way round, after the Claude session lets go
-    run_hook(CLAUDE, {"hook_event_name": "Stop", "cwd": repo, "session_id": "claude-session"})
-    assert json.loads(cursor_write(repo, "cursor-conv").stdout)["permission"] == "allow"
-    res = claude_edit(repo, "claude-session")
-    assert res.returncode == 2
-    assert "cursor-conv" in res.stderr

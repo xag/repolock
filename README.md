@@ -7,22 +7,41 @@ One developer, several AI agent sessions, one checkout.
 > This is a young protocol with a young implementation, and it sits on the write path of every
 > session on your machine. That is an unforgiving place for a bug.
 >
-> It has broken a working fleet once, in exactly the way you would least want: a change to the
-> write-detection gate made *reading* commands take the write lease
-> ([#4](https://github.com/xag/repolock/issues/4)), so sessions doing nothing but reading locked
-> out sessions that wanted to work. The blocked sessions could not inspect the repo, could not
-> wait out the lease, and could not file the bug — every escape route was itself a shell command,
-> and the shell was what was blocked. The gate is fixed and the four commands that caused it are
-> regression tests, but the shape of that failure is intrinsic to what this tool is: **when
-> repolock is wrong, it is wrong in the direction of stopping your work.**
+> It has broken a working fleet twice, both times through the same door. v0.1 decided whether a
+> shell command was a write **by reading it** — word lists of mutating commands, a redirect regex.
+> That gate locked *readers* out of their own repos ([#4](https://github.com/xag/repolock/issues/4)),
+> and then, after being fixed, did it again: a `>` inside a string
+> ([#7](https://github.com/xag/repolock/issues/7)) made `print("a -> b")` a redirect into a file,
+> so a session that was only reading took the lock — and could be refused one — on a repo it wasn't
+> even touching.
 >
-> Known-open, and worth reading before you install: a mutating command nobody listed still writes
-> unguarded ([#2](https://github.com/xag/repolock/issues/2)); writes through MCP tools are not
-> gated at all ([#3](https://github.com/xag/repolock/issues/3)); and a blocked session has no
-> good way to wait ([#5](https://github.com/xag/repolock/issues/5)).
+> **v1 deletes the classifier.** It cannot be made correct: `npm install` and `./deploy.sh` write and
+> name nothing a list can hold, while `git log --format='%h -> %s'` is a read under a POSIX shell and
+> a *write* under `cmd.exe`. Instead repolock now **looks at the repo** — a fingerprint before a tool
+> runs and after — and a write is a fingerprint that moved. That is an observation, not a prediction,
+> and it is right about `make`, `./deploy.sh` and every other command nobody listed.
 >
-> If it does get in your way, the off switch is one edit — delete the `hooks` block from
-> `~/.claude/settings.json` (or `~/.cursor/hooks.json`) and everything returns to normal
+> A shell still takes the lock *before* it runs — not because anyone thinks it writes, but because
+> acquiring is how you find out safely. If the fingerprint proves it only read, the lock is handed
+> straight back in the same breath. The price is stated rather than hidden: two sessions cannot run
+> shell commands against one checkout at the same instant. That is not a defect in a mutex, it is a
+> mutex — and `Read`/`Grep`/`Glob` are never gated, so a refused session can always still inspect
+> the repo and see why. See SPEC §7b.
+>
+> A refused session is no longer left at a locked door with no sign on it. It is told what the
+> holder is doing, what it has touched, and what is still open — and it can **subscribe**: the gate
+> hands it a background waiter that dies when the lock frees, so its harness wakes it and it can go
+> and do other work in the meantime ([#5](https://github.com/xag/repolock/issues/5)). Waiting used
+> to be impossible: `sleep` is a shell command, and the shell is exactly what was refused
+> ([#4](https://github.com/xag/repolock/issues/4)).
+>
+> Still open: writes through MCP tools are not seen at all
+> ([#3](https://github.com/xag/repolock/issues/3)).
+>
+> **The off switch, when it gets in your way:** `touch ~/.repolock/DISABLED` and every hook becomes a
+> no-op immediately — including in sessions already running, which snapshot their hooks at startup
+> and cannot be reached by editing config. Deleting the `hooks` block from `~/.claude/settings.json`
+> (or `~/.cursor/hooks.json`) uninstalls it for good
 > immediately. Nothing is left behind in your repos; the lock records live outside them.
 
 Git assumes the working tree has one author. Run two agent sessions against the same clone and
@@ -67,17 +86,32 @@ guarded — use an absolute path to a python that can import `repolock`:
       "hooks": [{"type": "command", "timeout": 20,
                  "command": "\"<python>\" \"<checkout>/repolock/hooks/claude_code.py\""}]
     }],
+    "PostToolUse": [{
+      "matcher": "Bash|PowerShell",
+      "hooks": [{"type": "command", "timeout": 20, "command": "<same>"}]
+    }],
     "Stop":         [{"hooks": [{"type": "command", "timeout": 20, "command": "<same>"}]}],
     "SessionStart": [{"hooks": [{"type": "command", "timeout": 20, "command": "<same>"}]}]
   }
 }
 ```
 
+`PostToolUse` is not optional: it is where a shell write is *discovered*, because it is the first
+moment anyone honestly can. Without it, `PreToolUse` still guards the file-editing tools — which
+declare what they will write — but every shell runs unobserved.
+
 Both shells belong in the matcher. The matcher is a list of *names*, and a name that is missing is
 a tool the hook never sees: on Windows `PowerShell` is the shell that actually runs, so a matcher
 without it leaves every write on that platform unguarded, silently and for as long as nobody looks.
 
-Optionally register the MCP server for visibility (`uv run python -m repolock.server`).
+**Register the MCP server too — it is not optional.** `uv run python -m repolock.server`.
+
+It carries `lock_wait`, and that is how a blocked session waits. It cannot wait by itself: waiting
+means running `sleep`, `sleep` is a shell command, and the shell is exactly what the lock just
+refused it. The hook does not gate MCP tools, so that is the one channel that still works from
+inside a refusal — it is also the only reason [#4](https://github.com/xag/repolock/issues/4) could
+be reported at all, by a session that could not run a shell. Install the hooks without the server
+and a refused session has nothing to do but spin.
 
 ## Install (Cursor)
 
@@ -102,11 +136,38 @@ mid-change tree — which is the point.
 
 ## What it feels like
 
-A session that tries to write into a checkout another live session is mid-change on gets the
-tool call blocked, with the holder, its intent, and when the lease frees. A session that stops
-to ask its human something releases on a clean tree, or holds until its lease lapses on a dirty
-one — and the next writer inherits a **handoff**: what landed while the previous holder was
-away, what it left uncommitted, and whether history was rewritten under everyone's feet.
+A session that tries to write into a checkout another live session is mid-change on gets the tool
+call blocked — and, more to the point, gets told enough to *do something about it*:
+
+```
+REPO LOCKED — another agent session is part-way through changing this working copy.
+  refused : Edit rhythm.py
+  holder  : session 8663de9b
+  doing   : Bash: uv run pytest -q tests/test_today.py
+  since   : 41s ago, still moving
+  frees in: ~598s — but activity renews the lease, so it may be longer
+  touched : 2 uncommitted change(s) in the tree —
+             M rhythm.py
+             M server.py
+```
+
+Then: what is still open (`Read`/`Grep`/`Glob` are never gated; every other repo is free), and two
+ways to wait — because **a blocked session cannot wait by itself**. `sleep` is a shell command, and
+the shell is exactly what was refused.
+
+- **Subscribe**, and get on with something else. The refusal hands over a one-time command; run it
+  in the background and your harness wakes you the moment the lock frees. That command is minted by
+  the gate and allowed by byte-equality against the string it wrote itself — a capability, not a
+  guess. Change one character and it is blocked like any other command.
+- **Block**, if you have nothing else to do: the `lock_wait` MCP tool returns the instant it frees.
+
+A session that stops to ask its human something releases on a clean tree, or holds until its lease
+lapses on a dirty one — and the next writer inherits a **handoff**: what landed while the previous
+holder was away, what it left uncommitted, and whether history was rewritten under everyone's feet.
+
+A gate that stops you without saying what it is waiting for, or offering a way to wait, leaves an
+agent doing what a person does at a locked door with no sign on it: rattling the handle. That is
+what v0.1 did, and it is the other half of why this release exists.
 
 ## Recording (on by default)
 
@@ -149,3 +210,13 @@ as the reference.
 | `REPOLOCK_DIR`        | lockfile directory (default `~/.repolock/locks`)      |
 | `REPOLOCK_FLIGHT`     | recording; **on** unless set to `0`/`false`/`off`     |
 | `REPOLOCK_FLIGHT_DIR` | where recordings land (default `~/.repolock/flight`)  |
+| `REPOLOCK_DISABLED`   | the panic switch; also `~/.repolock/DISABLED` (below) |
+
+**The panic switch.** `touch ~/.repolock/DISABLED` and every hook becomes a no-op immediately.
+
+A file, and checked on every hook call, rather than an install-time setting — because a harness
+snapshots its hooks when a session *starts*. Editing `settings.json` therefore cannot reach the
+sessions that are already running, which are precisely the ones you need to free. We learned that
+the expensive way: the hooks were uninstalled, a live session kept its old snapshot, and it was
+still being blocked minutes later. Uninstalling should never require restarting the work it is
+holding up.

@@ -1,0 +1,308 @@
+{
+  "name": "ledger",
+  "version": "0.1.0",
+  "description": "The design ledger as checkable data: decisions carrying the alternatives they rejected, hypotheses carrying what would kill them, and debts carrying the condition that discharges them. A debt's params are ungrounded by construction, so `grounding/untrusted_via` can ask a gate — a release, a publication, a cut, a trade — whether anything unsound is about to pass through it. The point is not to write the caveat down; a README already does that, and a README cannot fire. The point is that the caveat goes red.",
+  "publisher": "standard library",
+  "requires": [
+    {
+      "name": "grounding",
+      "version": "1.0.0"
+    }
+  ],
+  "vocabulary": [
+    {
+      "kind": "decision",
+      "description": "A choice made deliberately, kept so a later reader can tell it from an accident. Its children are the alternatives it rejected — as nodes, so 'what did we already rule out, and why' survives the rewrite that deletes the comment. A decision that is later reversed is not edited: the new decision `supersedes` it, and the core's supersession verb keeps both readable.",
+      "params": {},
+      "links": {
+        "supersedes": "the decision this one replaces, if any"
+      },
+      "operations": {}
+    },
+    {
+      "kind": "alternative",
+      "description": "An option that was considered and NOT taken, and why not (payload.why). Its value is entirely in being findable later: most bad re-litigation is someone re-proposing a thing that was already rejected for a reason nobody wrote down.",
+      "params": {},
+      "links": {},
+      "operations": {}
+    },
+    {
+      "kind": "hypothesis",
+      "description": "A belief held provisionally — something believed but not yet established. It must carry at least one falsification child; a belief with no condition that would kill it is not a hypothesis, it is a mood.",
+      "params": {},
+      "links": {},
+      "operations": {}
+    },
+    {
+      "kind": "falsification",
+      "description": "The observation that would kill the hypothesis above it. Carries a prose payload.claim and, where the claim is mechanically checkable, a payload.expr in the rule grammar plus payload.cadence — the same shape a watched criterion takes, so a ledger entry can graduate into a live check without being rewritten.",
+      "params": {},
+      "links": {},
+      "operations": {}
+    },
+    {
+      "kind": "debt",
+      "description": "Something known-unsound, carried deliberately, with its cost stated rather than forgotten. Its params hold the unsound values and are NOT grounded — that is what makes the debt legible to `grounding/*` and therefore to a gate. Discharging a debt is not deleting the node: it is someone competent checking those params and grounding them, which is exactly the act the debt was waiting for. The substrate does not care who that is — only that it happened.",
+      "params": {},
+      "links": {},
+      "operations": {}
+    },
+    {
+      "kind": "discharge",
+      "description": "The condition under which a debt is cleared — who must do what, and by when. A debt without one is not a debt, it is a permanent defect that has been dressed up as a plan.",
+      "params": {},
+      "links": {},
+      "operations": {}
+    },
+    {
+      "kind": "gate",
+      "description": "A point past which unsound things must not travel: a release, a publication, a cut, a trade. It links `admits` at whatever it lets through, and the rule below counts the ungrounded params on the other end. A gate is the only place a ledger stops being a record and starts being a brake.",
+      "params": {},
+      "links": {
+        "admits": "the nodes this gate lets through — each must be sound"
+      },
+      "operations": {}
+    }
+  ],
+  "rules": [
+    {
+      "name": "a-decision-names-what-it-rejected",
+      "expr": "len(nodes('alternative', self)) >= 1",
+      "description": "A choice with no stated alternative is indistinguishable from an accident, and cannot be re-examined — there is nothing to re-examine it against.",
+      "kind": "decision"
+    },
+    {
+      "name": "a-hypothesis-is-falsifiable",
+      "expr": "len(nodes('falsification', self)) >= 1",
+      "description": "A belief that cannot be killed by any observation is not being tested by the project; it is being assumed by it.",
+      "kind": "hypothesis"
+    },
+    {
+      "name": "a-debt-states-how-it-is-discharged",
+      "expr": "len(nodes('discharge', self)) >= 1",
+      "description": "An unsound thing carried with no discharge condition is not debt, it is decay. The condition is what lets anyone else finish it.",
+      "kind": "debt"
+    },
+    {
+      "name": "nothing-unsound-passes-a-gate",
+      "expr": "solve('grounding/untrusted_via', self, 'admits') == 0",
+      "description": "The load-bearing one. Whatever this gate admits must rest on observations, not on guesses: no ungrounded param may travel through it. This is the rule that turns a written-down caveat into a thing that stops a release.",
+      "kind": "gate"
+    }
+  ],
+  "solvers": [],
+  "examples": [
+    {
+      "id": "chose-strict-validation",
+      "kind": "decision",
+      "name": "Validate every translation bundle against the reference bundle, key for key",
+      "params": {},
+      "links": {},
+      "meta": {},
+      "payload": {
+        "rationale": "A bundle silently missing a key ships a blank string to a reader who cannot tell us, in a language we cannot read.",
+        "consequence": "Every copy change becomes an all-bundles change. That cost is real and was accepted with open eyes; it is recorded here so the next person meets it as a decision, not a surprise."
+      },
+      "children": [
+        {
+          "id": "fall-back-to-reference",
+          "kind": "alternative",
+          "name": "Fall back to the reference bundle for a missing key",
+          "params": {},
+          "links": {},
+          "meta": {},
+          "payload": {
+            "why": "Cheaper per edit, but a visible fallback in the wrong language is a bug a reader reports; an invisible one is a bug nobody ever reports. Rejected — for now: if the edit cost bites, this is the first thing to revisit."
+          },
+          "children": []
+        }
+      ]
+    },
+    {
+      "id": "bundles-are-good-enough",
+      "kind": "hypothesis",
+      "name": "The generated bundles are good enough to publish unreviewed",
+      "params": {},
+      "links": {},
+      "meta": {},
+      "payload": {
+        "held_because": "spot checks in the two languages we can read looked fine"
+      },
+      "children": [
+        {
+          "id": "a-reader-reports-nonsense",
+          "kind": "falsification",
+          "name": "A reader of that language reports the copy as wrong or unidiomatic",
+          "params": {},
+          "links": {},
+          "meta": {},
+          "payload": {
+            "claim": "One credible report of broken copy in any generated bundle falsifies this and the bundles must be read.",
+            "cadence": "on-report"
+          },
+          "children": []
+        }
+      ]
+    },
+    {
+      "id": "reviewed-bundle",
+      "kind": "debt",
+      "name": "A bundle that WAS generated unchecked, and has since been read",
+      "params": {
+        "strings": {
+          "value": 47.0,
+          "unit": "string",
+          "provenance": "verified",
+          "grounded": true,
+          "source": "checked by a reader of that language",
+          "derived_from": []
+        }
+      },
+      "links": {},
+      "meta": {},
+      "payload": {},
+      "children": [
+        {
+          "id": "read-it",
+          "kind": "discharge",
+          "name": "Someone who reads the language checks every string",
+          "params": {},
+          "links": {},
+          "meta": {},
+          "payload": {
+            "who": "any competent reader of it",
+            "done": "2026-07"
+          },
+          "children": []
+        }
+      ]
+    },
+    {
+      "id": "release",
+      "kind": "gate",
+      "name": "Publication: nothing unsound reaches a reader",
+      "params": {},
+      "links": {
+        "admits": [
+          "reviewed-bundle"
+        ]
+      },
+      "meta": {},
+      "payload": {},
+      "children": []
+    }
+  ],
+  "counter_examples": [
+    {
+      "rule": "a-decision-names-what-it-rejected",
+      "nodes": [
+        {
+          "id": "just-did-it",
+          "kind": "decision",
+          "name": "We went with the obvious thing",
+          "params": {},
+          "links": {},
+          "meta": {},
+          "payload": {
+            "rationale": "it seemed right at the time"
+          },
+          "children": []
+        }
+      ],
+      "because": "a choice with no rejected alternative"
+    },
+    {
+      "rule": "a-hypothesis-is-falsifiable",
+      "nodes": [
+        {
+          "id": "it-will-be-fine",
+          "kind": "hypothesis",
+          "name": "It will probably be fine",
+          "params": {},
+          "links": {},
+          "meta": {},
+          "payload": {},
+          "children": []
+        }
+      ],
+      "because": "a belief nothing could disprove"
+    },
+    {
+      "rule": "a-debt-states-how-it-is-discharged",
+      "nodes": [
+        {
+          "id": "fix-later",
+          "kind": "debt",
+          "name": "We'll clean this up at some point",
+          "params": {
+            "strings": {
+              "value": 47.0,
+              "unit": "string",
+              "provenance": "unverified",
+              "grounded": false,
+              "source": "generator",
+              "derived_from": []
+            }
+          },
+          "links": {},
+          "meta": {},
+          "payload": {},
+          "children": []
+        }
+      ],
+      "because": "an unsound thing carried with no way to finish it"
+    },
+    {
+      "rule": "nothing-unsound-passes-a-gate",
+      "nodes": [
+        {
+          "id": "unread-bundle",
+          "kind": "debt",
+          "name": "A machine-generated bundle nobody has read",
+          "params": {
+            "strings": {
+              "value": 47.0,
+              "unit": "string",
+              "provenance": "unverified",
+              "grounded": false,
+              "source": "generator",
+              "derived_from": []
+            }
+          },
+          "links": {},
+          "meta": {},
+          "payload": {},
+          "children": [
+            {
+              "id": "read-it",
+              "kind": "discharge",
+              "name": "Someone who reads the language checks every string",
+              "params": {},
+              "links": {},
+              "meta": {},
+              "payload": {
+                "who": "any competent reader of it"
+              },
+              "children": []
+            }
+          ]
+        },
+        {
+          "id": "release",
+          "kind": "gate",
+          "name": "Publication",
+          "params": {},
+          "links": {
+            "admits": [
+              "unread-bundle"
+            ]
+          },
+          "meta": {},
+          "payload": {},
+          "children": []
+        }
+      ],
+      "because": "a release that publishes a value nobody ever checked"
+    }
+  ]
+}

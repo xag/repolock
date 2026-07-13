@@ -79,6 +79,35 @@ def lock_status(repo: str) -> str:
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
+def lock_wait(repo: str, timeout_seconds: int = 240) -> str:
+    """Wait for a locked working copy to free up, and return the moment it does.
+
+    **This is how a blocked session waits, and it is not optional.** You cannot wait by yourself:
+    waiting means running `sleep`, `sleep` is a shell command, and the shell is exactly what the
+    lock refused you. This tool is the escape, because the hook does not gate MCP tools.
+
+    It returns as soon as the lock frees (or lapses — a lapsed lock is yours: the next write takes
+    it over with a handoff). If the holder is still working when the timeout runs out, it says so
+    and tells you how much lease is left, so you can wait again or go and do something else.
+
+    `timeout_seconds` is capped at 240 — MCP kills a silent call at a hard idle timeout (we watched
+    one die at exactly 300s), so a longer wait would abort rather than wait and would look like a
+    server hang.
+
+    **This blocks your turn.** If you have other work to get on with, do not use it: the refusal
+    hands you a one-time command that waits in the BACKGROUND and lets your harness wake you when
+    the lock frees. Take that instead, and keep working.
+
+    After it returns `free`, just retry the tool you were blocked on. The hook takes the lock.
+    """
+    v = repolock.wait_until_free(
+        repo, timeout_seconds=min(float(timeout_seconds), repolock.MCP_MAX_WAIT_SECONDS))
+    if v["status"] == "free":
+        return v["message"] + "\nRetry the tool you were blocked on — the hook will take the lock."
+    return _fmt_lock(repolock.status(repo)) + f"\n\n{v['message']}"
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 def lock_drift(repo: str, seen_head: str) -> str:
     """Has this working copy moved under you since you last looked? `seen_head` is the commit sha
     you last saw. No lock involved — this is the read-side check.

@@ -76,50 +76,94 @@ def _repos(p: dict) -> list[str]:
 def _record() -> None:
     """Arm the recorder immediately before the first call into `lock` — never at the top of
     main(). The boundary being recorded IS the lock, so a hook call that takes no lock has
-    nothing to record, and installing eagerly would tax every read with the import."""
-    if env.recording():
+    nothing to record, and installing eagerly would tax every read with the import.
+
+    A missing recorder must never cost the lock: `flight-recorder` is an optional extra, so a plain
+    install has none, and an ImportError here used to travel into the fail-open handler and disable
+    every hook. Run without a tape, not without a lock."""
+    if not env.recording():
+        return
+    try:
         from repolock import flight
-        flight.install()
+    except ImportError:
+        return
+    flight.install()
 
 
-def _gate(p: dict, repo: str, intent: str) -> None:
+def _catch_up(p: dict) -> list[str]:
+    """Settle the speculative lock taken before the LAST shell, on the way into this event.
+
+    Adapter #1 settles at PostToolUse, the moment the command returns. Cursor's post-tool event I
+    have NOT verified against the real client, and hand-rolling someone's wire format from memory is
+    just relocated guessing — the same species of mistake as reading a command to guess its effect.
+    So this adapter settles LAZILY, at the start of the next event.
+
+    The consequence is real and must not be glossed: between a read-only shell and Cursor's next
+    hook call, this session holds a lock it does not need. It is bounded by the lease and released
+    the moment anything else happens, but it is a worse #4 risk than adapter #1 carries. Verify
+    Cursor's post-tool event against the real client and settle there instead — see SPEC §7b.
+    """
     _record()
-    denial, notes = common.gate(repo, _session(p), intent)
+    session = _session(p)
+    return [n for repo in _repos(p) for n in common.settle_unknown(repo, session)]
+
+
+def _gate(p: dict, repo: str, intent: str, notes: list[str]) -> None:
+    denial, more = common.gate(repo, _session(p), intent)
     if denial:
         _out({"permission": "deny",
               "user_message": f"repo-lock: {repo} is held by another session",
               "agent_message": denial})
     out: dict = {"permission": "allow"}
-    if notes:
-        out["agent_message"] = "\n".join(notes)
+    if notes + more:
+        out["agent_message"] = "\n".join(notes + more)
     _out(out)
 
 
 def pre_tool_use(p: dict) -> None:
+    notes = _catch_up(p)
     tool = (p.get("tool_name") or "").lower()
-    # Shell is gated by beforeShellExecution with the actual command text; double-gating here
-    # would lock on read-only shell commands too.
+    # Shell is handled by beforeShellExecution. Anything that is not a file-editing tool tells us
+    # nothing about what it will do, so it is not gated here — it is observed, like a shell.
     if tool == "shell" or not any(h in tool for h in WRITING_TOOL_HINTS):
-        _out({"permission": "allow"})
-    repos = _repos(p)
-    if not repos:
-        _out({"permission": "allow"})
-    _gate(p, repos[0], intent=p.get("tool_name") or "edit")
+        _out({"permission": "allow", **({"agent_message": "\n".join(notes)} if notes else {})})
+
+    # A file-editing tool names its target. Prefer the repo that owns the FILE over the session's
+    # cwd (#8); fall back to cwd only when Cursor's payload does not carry a path.
+    args = p.get("tool_input") or p.get("args") or {}
+    path = args.get("file_path") or args.get("path") or args.get("target_file") or ""
+    repo = common.repo_of(path) if path else None
+    if not repo:
+        repos = _repos(p)
+        if not repos:
+            _out({"permission": "allow", **({"agent_message": "\n".join(notes)} if notes else {})})
+        repo = repos[0]
+    _gate(p, repo, intent=p.get("tool_name") or "edit", notes=notes)
 
 
 def before_shell(p: dict) -> None:
-    if not common.shell_writes(p.get("command") or ""):
-        _out({"permission": "allow"})
-    repos = _repos(p)
-    if not repos:
-        _out({"permission": "allow"})
-    _gate(p, repos[0], intent="shell")
+    """A shell's effect is not decidable from its text, so this no longer tries: it takes the lock
+    on speculation and lets the fingerprint settle it afterwards (_catch_up)."""
+    notes = _catch_up(p)
+    session = _session(p)
+    command = p.get("command") or ""
+    for repo in _repos(p):
+        # The waiter this gate minted for a blocked session: byte equality against our own token,
+        # never a reading of the command. Without it a refused session cannot wait at all.
+        if common.is_ticket(session, repo, command):
+            _out({"permission": "allow"})
+        denial, more = common.hold_unknown(repo, session, intent="shell")
+        if denial:
+            _out({"permission": "deny",
+                  "user_message": f"repo-lock: {repo} is held by another session",
+                  "agent_message": denial})
+        notes += more
+    _out({"permission": "allow", **({"agent_message": "\n".join(notes)} if notes else {})})
 
 
 def go_idle(p: dict) -> None:
-    _record()
+    notes = _catch_up(p)                          # a write by the last shell must not be missed
     session = _session(p)
-    notes = []
     for repo in _repos(p):
         verdict = lock.go_idle(repo, session)
         if verdict["status"] == "idle_dirty":
@@ -157,6 +201,9 @@ HANDLERS = {
 def main() -> None:
     # No recorder here — see _record(): it is armed in the handlers that call `lock`, so a
     # read-only shell command never pays the flight-recorder import.
+    if env.disabled():
+        _out({"permission": "allow"})     # the panic switch — see env.disabled()
+
     try:
         payload = json.load(sys.stdin)
     except (json.JSONDecodeError, ValueError):
