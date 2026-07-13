@@ -327,6 +327,30 @@ def test_claude_fails_open_on_garbage_input(repo):
     assert res.returncode == 0
 
 
+def test_without_the_settle_hook_it_degrades_instead_of_locking_every_read(repo):
+    """A `PreToolUse`-only install — a config typo, or ANY session that snapshotted its hooks before
+    PostToolUse was added — must not turn every read into a ten-minute lock.
+
+    The pessimistic hold is affordable only because the lock comes straight back when a command
+    turns out to have read. With no settle event, nothing hands it back, and a `cat` holds the repo
+    for a full lease: bug #4, reproduced from a missing line of JSON. The hook detects it (a
+    fingerprint memo that survived the last call proves settle never ran), gives back what it should
+    not be holding, and degrades to unguarded shells — loudly."""
+    def pre_only(session, command):                 # PreToolUse fires; PostToolUse never does
+        return run_hook(CLAUDE, {"hook_event_name": "PreToolUse", "tool_name": "Bash",
+                                 "tool_input": {"command": command}, "cwd": repo,
+                                 "session_id": session})
+
+    assert pre_only("A", "cat a.txt").returncode == 0        # 1st call: takes the speculative lock
+    res = pre_only("A", "cat a.txt")                         # 2nd: the memo survived => no settle
+    assert res.returncode == 0
+    assert "DEGRADED" in res.stdout and "PostToolUse" in res.stdout
+
+    other = claude_edit(repo, "B")
+    assert other.returncode == 0, (
+        "a reading session held the repo against B because settle was never wired — this is #4")
+
+
 def test_a_missing_flight_recorder_costs_the_tape_not_the_lock(repo, tmp_path, monkeypatch):
     """`flight-recorder` is an OPTIONAL extra and recording is ON by default, so a plain
     `pip install .` has no recorder. The ImportError used to travel up into the fail-open handler

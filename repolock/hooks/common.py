@@ -49,6 +49,7 @@ LEASE_SECONDS = 600          # renewed on every tool call; must outlast the long
 SEEN_DIR = "seen"            # per-(session, repo) memory of the last HEAD seen — the drift check
 FP_DIR = "fp"                # ...and of the fingerprint taken before the tool now running
 TICKET_DIR = "tickets"       # ...and the one command a refused session is allowed to run
+WARNED_DIR = "warned"        # ...and whether we already told this session its install is broken
 
 
 def ticket_for(session: str, repo: str) -> str:
@@ -288,6 +289,36 @@ def gate(repo: str, session: str, intent: str) -> tuple[str | None, list[str]]:
     return None, notes
 
 
+def _degraded(repo: str, session: str, intent: str) -> tuple[str | None, list[str]]:
+    """No settle event => the pessimistic hold is not affordable, so do not take it.
+
+    Refuse only what is provably unsafe without holding anything: a live holder with a DIRTY tree.
+    That is a fact about the checkout, not a guess about the command — someone's half-finished edits
+    are in it. A live holder with a clean tree blocks nobody: nothing is in flight, and a lock held
+    against sessions that would not have collided is #4's livelock wearing a different hat.
+
+    Shell writes then go unguarded, which is genuinely bad. It is still far better than the
+    alternative this replaces, where a `cat` locks the repo for ten minutes and no one can see why.
+    """
+    warn = ("repo-lock: DEGRADED — the settle hook (PostToolUse) is not wired, so a lock taken "
+            "before a shell\nis never handed back, and every read would hold this repo for a full "
+            "lease (that is bug #4).\nRunning UNGUARDED for shell commands instead. Declared writes "
+            "(Edit/Write) are still locked.\n\nFix: wire PostToolUse (matcher Bash|PowerShell) to "
+            "this same script, then RESTART this session —\nit snapshotted its hooks when it "
+            "started and cannot see a new one.")
+    verdict = lock.status(repo)
+    if (verdict["status"] == "locked" and verdict["lock"]["session"] != session
+            and verdict["dirty"]):
+        return format_held(repo, attempted=intent, session=session), []
+
+    # Once per (session, repo). A warning printed on every tool call for the rest of a session is a
+    # warning nobody reads, and the noise would bury the refusals that actually matter.
+    if _recall(WARNED_DIR, session, repo):
+        return None, []
+    _remember(WARNED_DIR, session, repo, "1")
+    return None, [warn]
+
+
 def hold_unknown(repo: str, session: str, intent: str,
                  background: bool = False) -> tuple[str | None, list[str]]:
     """The shell, whose effect we refuse to guess at. Called BEFORE it runs.
@@ -307,6 +338,25 @@ def hold_unknown(repo: str, session: str, intent: str,
     and hands it back in the same breath. What it costs is that two sessions cannot run shell
     commands in one checkout at the same instant — which is not a bug in a mutex, it is a mutex.
     """
+    # Is the settle half actually wired? A fingerprint memo left over from the LAST call proves it is
+    # not: settle_unknown() always forgets the memo, so a surviving one means it never ran.
+    #
+    # This has to be detected, not documented. The pessimistic hold is only affordable because the
+    # lock comes back the instant a command turns out to have read — and if the adapter's "after"
+    # event is missing (a half-finished install; a session that snapshotted its hooks before
+    # PostToolUse was added, which is EVERY session already running when you upgrade), then nothing
+    # ever hands it back, and every `cat` holds the repo for a full lease. That is #4 exactly, from a
+    # config typo. "The README says PostToolUse is required" is prose, and prose cannot fire.
+    #
+    # So we degrade instead of starving: release what we are wrongly holding, stop taking the lock on
+    # speculation, and fall back to refusing only what is provably unsafe — a live holder with a
+    # dirty tree. Shells go unguarded, which is bad; the alternative is a machine where every read
+    # locks a repo for ten minutes, which is worse and much harder to diagnose.
+    if _recall(FP_DIR, session, repo):
+        _forget(FP_DIR, session, repo)
+        lock.release(repo, session, force=True)      # give back what we should never have kept
+        return _degraded(repo, session, intent)
+
     verdict = lock.acquire(repo, session, pid=0, lease_seconds=LEASE_SECONDS, intent=intent)
     if verdict["status"] == "held":
         return format_held(repo, attempted=intent, session=session), []
