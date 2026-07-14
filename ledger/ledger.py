@@ -473,6 +473,52 @@ DECISIONS = [
                                   "corruption into a named collision, which is the whole difference"}),
          ]),
 
+    Node(id="filesystem-is-the-namespace", kind="decision",
+         name="A scope resource is a canonical filesystem path — one namespace, one overlap relation",
+         payload={"rationale":
+                  "SPEC-v2's first draft let a scope hold resources from several namespaces: paths, "
+                  "plus opaque names (`git:index`, `port:3000`) overlapping by string equality. The "
+                  "user's question killed it: if scope is free-form, whom do we inform, without "
+                  "broadcasting? Routing was never the problem — the claim store is the routing "
+                  "table and overlap computes the addressees — but ALIASING was: two spellings of "
+                  "one real resource (`port:3000` vs `dev-server`) read as disjoint, both granted, "
+                  "and the collision lands in the world with the system reporting calm. The failure "
+                  "mode of free-form is not noise, it is silence.\n\n"
+                  "So the namespace is the local filesystem, whole: a resource is a canonical "
+                  "absolute path (realpath+normcase — the same canonicalisation the v1 lockfile has "
+                  "always used), one file or a subtree. Aliasing dies by construction: case, "
+                  "symlinks, junctions, `..` all resolve to one string. Overlap is the prefix "
+                  "relation, so a conflict names the exact INTERSECTION and 'come back narrower' is "
+                  "computed rather than guessed.\n\n"
+                  "And the special resources were never special: `git:index` IS `<repo>/.git/index`, "
+                  "`git:HEAD` IS `<repo>/.git/HEAD`. The founding incident's cure — reserve the "
+                  "index before you commit — needs no second kind of resource, no second overlap "
+                  "relation to get wrong, and the witness already sees the sweep through the "
+                  "porcelain."},
+         children=[
+             Node(id="alt-per-namespace-overlap", kind="alternative",
+                  name="Several namespaces, each with its own overlap relation",
+                  payload={"why": "the first draft. Routing works, but every opaque namespace is a "
+                                  "contract without a witness AND an aliasing surface: equality "
+                                  "cannot see that two names mean one resource. Each added "
+                                  "namespace is a second overlap relation to get subtly wrong, in "
+                                  "the one function whose failure is silent"}),
+             Node(id="alt-freeform-with-registry", kind="alternative",
+                  name="Free-form names, converging by visibility (scopes() as discovery)",
+                  payload={"why": "convention-over-ontology does converge for a handful of agents, "
+                                  "but 'converges' is a behavioural bet stacked on top of the "
+                                  "behavioural bet the trial already carries. The filesystem gives "
+                                  "the same expressiveness for everything the trial actually "
+                                  "protects, with zero bets"}),
+             Node(id="alt-ports-and-services", kind="alternative",
+                  name="Keep port:/service: for the things a filesystem cannot name",
+                  payload={"why": "a port is a name no fingerprint can witness — a violation "
+                                  "surfaces as two dev servers fighting, never as a line on the "
+                                  "tape. Dropped rather than carried: a contract nobody can check "
+                                  "is not a contract, and it can earn its way in later WITH a "
+                                  "witness"}),
+         ]),
+
     Node(id="the-off-switch-cannot-need-a-shell", kind="decision",
          name="The off switch is an MCP tool and a file — never a command in a terminal",
          payload={"rationale":

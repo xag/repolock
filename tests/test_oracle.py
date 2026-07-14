@@ -138,9 +138,13 @@ def test_the_oracle_condemns_a_scope_granted_over_a_live_claim(recorded_scopes):
 
     handle = recorded_scopes.call(1)                     # B declares web/** — recorded as GRANTED
 
-    rival = _json.dumps({"repo": "r", "session": "A", "scope": ["web/**"],   # ...but A holds it
-                         "intent": "the page, actually", "acquired_at": 0,
-                         "renewed_at": 0, "expires_at": 9e18, "lease_seconds": 900})
+    # ...but A already holds the same canonical region. The claim store speaks canonical absolute
+    # paths — the one namespace — so the rival is spelt exactly as the grant will be.
+    granted = (recorded_scopes.calls[1]["result"] or {}).get("claim", {}).get("scope") or []
+    assert granted, "the fixture's second declare was not granted — the control has no subject"
+    rival = _json.dumps({"session": "A", "scope": granted, "intent": "the page, actually",
+                         "acquired_at": 0, "renewed_at": 0, "expires_at": 9e18,
+                         "lease_seconds": 900})
     handle.effect("read_claims").result = [rival]
 
     real = scope.overlaps

@@ -43,20 +43,34 @@ def dirs(repo, *names):
 
 # --- the overlap relation: everything rests on this being right -----------------------------------
 
-def test_overlap_is_decidable_or_it_is_refused():
+def test_overlap_is_decidable_or_it_is_refused(repo):
     """A scope system that is unsure whether two regions touch would hand the same region to two
-    agents and tell them both they were alone. So the grammar is small, and anything outside it is
-    REJECTED rather than guessed at."""
-    assert scope.overlaps("**", "src/a.py")                 # silence is `**`, and `**` is v1
-    assert scope.overlaps("src/**", "src/api/x.py")         # a file inside a subtree
-    assert scope.overlaps("src/**", "src/api/**")           # nested subtrees
-    assert scope.overlaps("git:index", "git:index")
-    assert not scope.overlaps("src/**", "web/**")           # siblings
-    assert not scope.overlaps("src/a.py", "src/b.py")
-    assert not scope.overlaps("git:index", "src/**")        # named vs path: different namespaces
+    agents and tell them both they were alone. So there is ONE namespace — canonical filesystem
+    paths — one overlap relation (the prefix), and anything else is REJECTED rather than guessed at.
+    """
+    r = "c:/x/repo"
+    assert scope.overlaps(f"{r}/**", f"{r}/src/a.py")        # the whole checkout covers everything
+    assert scope.overlaps(f"{r}/src/**", f"{r}/src/api/x.py")   # a file inside a subtree
+    assert scope.overlaps(f"{r}/src/**", f"{r}/src/api/**")     # nested subtrees
+    assert not scope.overlaps(f"{r}/src/**", f"{r}/web/**")     # siblings
+    assert not scope.overlaps(f"{r}/src/a.py", f"{r}/src/b.py")
+    assert not scope.overlaps(f"{r}/src/**", f"{r}/srcx/y.py")  # prefix means DIRECTORY, not string
 
-    assert scope.bad_resource("src/*.py"), "a general glob has no decidable overlap and must be refused"
-    assert not scope.bad_resource("src/**")
+    # ...and a conflict names the exact intersection, so "come back narrower" is computed, not guessed
+    assert scope.intersection(f"{r}/src/**", f"{r}/src/api/**") == f"{r}/src/api/**"
+    assert scope.intersection(f"{r}/src/**", f"{r}/src/a.py") == f"{r}/src/a.py"
+
+    # every spelling of a path resolves to ONE canonical form: aliasing is dead on arrival
+    a = scope.resolve("API/../api/server.py", repo)
+    b = scope.resolve("api/server.py", repo)
+    assert a == b, "two spellings of one file must collapse to one claim"
+
+    # what has no decidable overlap, or no witness, is not reservable
+    assert scope.resolve("src/*.py", repo) is None, "a general glob must be refused"
+    assert scope.resolve("git:index", repo) is None, "a named resource is not a path — say .git/index"
+    assert scope.resolve("port:3000", repo) is None
+    assert scope.resolve(".git/index", repo), "the index IS a file, and reservable as one"
+    assert scope.resolve("**", repo) == scope.canon(repo) + "/**"   # the degenerate case, spelt out
 
 
 # --- 1. the winnings ------------------------------------------------------------------------------
@@ -89,6 +103,8 @@ def test_an_overlapping_scope_is_refused_and_told_where_to_go(repo):
     assert v["status"] == "conflict"
     assert v["conflicts"][0]["session"] == "A"
     assert "the rate limiter" in v["conflicts"][0]["intent"]
+    assert v["conflicts"][0]["intersection"] == [scope.canon(repo) + "/api/handlers/**"], (
+        "a conflict must name the exact intersection, so narrowing is computed rather than guessed")
     assert any("web" in f for f in v["free_hint"]), "a conflict that does not say where to go is a wall"
 
 
@@ -111,7 +127,7 @@ def test_writing_into_unclaimed_ground_just_extends_your_scope(repo):
     dirs(repo, "api")
     declare(repo, "A", ["api/**"])
     assert claude_edit(repo, "A", path="notes.md").returncode == 0
-    assert scope.covers(scope.scope_of(repo, "A"), "notes.md")
+    assert scope.covers(scope.scope_of("A"), scope.canon(os.path.join(repo, "notes.md")))
 
 
 # --- 2. the witness: what a shell and an MCP call get instead of a gate ---------------------------
@@ -204,8 +220,67 @@ def test_a_scoped_session_gives_its_region_back_on_a_clean_tree(repo):
     subprocess.run(["git", "commit", "-qm", "x"], cwd=repo, check=True)
     run_hook(CLAUDE, {"hook_event_name": "Stop", "cwd": repo, "session_id": "A"})
 
-    assert not scope.declared(repo, "A"), "a clean scoped session must let its region go"
+    assert not scope.declared("A"), "a clean scoped session must let its region go"
     assert declare(repo, "B", ["api/**"])["status"] == "granted"
+
+
+def test_an_undeclared_sessions_mcp_call_is_never_gated_even_when_scopes_exist(repo):
+    """§7c does not have a scope-shaped exception, and the first trial build shipped one.
+
+    The undeclared-session refusal fired BEFORE the MCP branch, so the moment any agent held a
+    scope, an undeclared session in that repo was denied its MCP calls — including, because the four
+    channel tools were missing from OUR_MCP_TOOLS, `declare_scope` itself. The refusal said "the way
+    out is declare_scope" and then blocked declare_scope: the door out was locked from the outside,
+    and the protocol could never gain a second participant on a contested repo.
+    """
+    dirs(repo, "api")
+    declare(repo, "A", ["api/**"], intent="the rate limiter")
+
+    for tool in ("mcp__repo-lock__declare_scope",                    # THE WAY IN — must never be gated
+                 "mcp__repo-lock__scopes",
+                 "mcp__claude_ai_Gmail__search_threads",             # any ordinary MCP call
+                 "mcp__claude_ai_Dev_Tools__create_github_issue"):   # "file an issue and move on"
+        res = run_hook(CLAUDE, {"hook_event_name": "PreToolUse", "tool_name": tool,
+                                "tool_input": {}, "cwd": repo, "session_id": "B"})
+        assert res.returncode == 0, (
+            f"{tool} was gated for an undeclared session — §7c has no scope exception, and this "
+            f"one blocks the exact tool the refusal tells the agent to call")
+
+    res = claude_shell(repo, "B", "cat a.txt")                       # ...while the shell IS still gated
+    assert res.returncode == 2, "the teaching refusal must still hold the shell"
+    assert "declare_scope" in res.stderr
+
+
+def test_a_scope_cannot_be_declared_over_a_live_v1_lock(repo):
+    """v1 is the degenerate case of v2 — IN BOTH DIRECTIONS, and the first trial build had only one.
+
+    An undeclared session is `**`, so claims hold it out. But a v1 LOCK is also `**` — a session
+    that took the whole-checkout lock was promised the whole checkout — and `declare` never read it.
+    A scoped agent could reserve api/** over a live v1 holder and write into the tree that holder
+    believed was exclusively theirs. Mixed fleet, silent collision, the founding incident with a
+    scope as the weapon."""
+    assert claude_edit(repo, "B").returncode == 0                    # B holds the v1 lock, live
+
+    v = declare(repo, "A", ["api/**"])
+    assert v["status"] == "conflict", "a live v1 lock must read as a claim on the whole checkout"
+    assert v["conflicts"][0]["session"] == "B"
+    assert v["conflicts"][0]["scope"] == [scope.canon(repo) + "/**"]
+
+
+def test_a_scoped_agent_is_held_out_by_a_v1_lock_that_arrives_after_it_declared(repo):
+    """The other arrival order. A holds api/**; then a v1 whole-checkout lock appears (an undeclared
+    MCP writer can mint one through settle_observed). The v1 holder was promised everything, so A's
+    next declared write must be refused like any write into a held checkout — scoped is not a
+    priesthood that the v1 mutex stops applying to."""
+    dirs(repo, "api")
+    declare(repo, "A", ["api/**"])
+
+    from repolock import lock
+    lock.acquire(repo, "B", pid=0, lease_seconds=600, intent="an undeclared MCP writer")
+
+    res = claude_edit(repo, "A", path="api/server.py")
+    assert res.returncode == 2, "a scoped agent wrote into a checkout a v1 holder was promised"
+    assert "session B" in res.stderr
 
 
 def test_the_kill_switch_still_stops_everything(repo, tmp_path):

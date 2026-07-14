@@ -136,17 +136,13 @@ def _touches(a: str, b: str) -> bool:
     of duplication, and they are the twenty that would catch it.
     """
     a, b = a.strip().replace("\\", "/"), b.strip().replace("\\", "/")
-    if "**" in (a, b) or a == b:
+    if a == b:
         return True
 
-    def named(r):
-        return ":" in r.split("/")[0]
-
     def pre(r):
-        return r[:-3].rstrip("/") + "/" if r.endswith("/**") else (r if r.endswith("/") else None)
+        # a subtree claim `dir/**` covers everything under `dir/` — canonical paths, one namespace
+        return r[:-2] if r.endswith("/**") else None
 
-    if named(a) or named(b):
-        return False                            # named resources: equal-or-disjoint, nothing else
     pa, pb = pre(a), pre(b)
     if pa and pb:
         return pa.startswith(pb) or pb.startswith(pa)

@@ -173,46 +173,51 @@ def remove_record(repo: str) -> bool:
 
 # --- the claim store (SPEC-v2 §2) ---------------------------------------------------------------
 #
-# One file per (repo, agent), never one file per repo holding a list. That is not tidiness, it is
-# the only way this is safe without a mutex of its own: a shared list would be read-modify-write, so
-# two agents declaring at the same instant would clobber each other — and a lock store that loses a
-# claim under contention is a lock store that fails exactly when it is needed. Each agent writes only
-# its OWN file, and reading the directory is what enumerates the claims.
+# MACHINE-GLOBAL, not per-repo, because the namespace a claim is written in is the local filesystem
+# itself: every scope entry is a canonical absolute path, so the store needs no second notion of
+# where a claim "belongs" — the paths already say. The repo is only the anchor that resolved the
+# relative spellings, and keying the store on it would re-introduce exactly the ambiguity (#8's
+# whole family) that canonical paths abolish.
+#
+# One file per agent, never one shared list. That is not tidiness, it is the only way this is safe
+# without a mutex of its own: a list would be read-modify-write, so two agents declaring at the same
+# instant would clobber each other — and a claim store that loses a claim under contention loses it
+# exactly when it is needed. Each agent writes only its OWN file; reading the directory enumerates
+# the claims.
 
-def claims_dir(repo: str) -> str:
+def claims_dir() -> str:
     """Beside the lockfiles, and outside every repo, for the reasons lock_dir() gives."""
-    key = hashlib.sha256(repo.encode("utf-8")).hexdigest()[:16]
-    d = os.path.join(os.path.dirname(lock_dir()), "claims", key)
+    d = os.path.join(os.path.dirname(lock_dir()), "claims")
     os.makedirs(d, exist_ok=True)
     return d
 
 
-def claim_path(repo: str, session: str) -> str:
-    return os.path.join(claims_dir(repo), f"{hashlib.sha256(session.encode()).hexdigest()[:16]}.json")
+def claim_path(session: str) -> str:
+    return os.path.join(claims_dir(), f"{hashlib.sha256(session.encode()).hexdigest()[:16]}.json")
 
 
-def read_claims(repo: str) -> list[str]:
-    """The raw text of every claim on this repo. Unparsable ones are the caller's problem — the
+def read_claims() -> list[str]:
+    """The raw text of every claim on the machine. Unparsable ones are the caller's problem — the
     SPEC says a torn record reads as no claim, and that judgement is policy, so it is not made here."""
     out = []
     try:
-        names = sorted(os.listdir(claims_dir(repo)))
+        names = sorted(os.listdir(claims_dir()))
     except OSError:
         return out
     for name in names:
         if not name.endswith(".json"):
             continue
         try:
-            with open(os.path.join(claims_dir(repo), name), encoding="utf-8") as f:
+            with open(os.path.join(claims_dir(), name), encoding="utf-8") as f:
                 out.append(f.read())
         except OSError:
             continue
     return out
 
 
-def write_claim(repo: str, session: str, text: str) -> str:
+def write_claim(session: str, text: str) -> str:
     """Atomic, for the same reason write_record is: a torn claim is a region nobody owns."""
-    path = claim_path(repo, session)
+    path = claim_path(session)
     tmp = f"{path}.{os.getpid()}.tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         f.write(text)
@@ -222,9 +227,9 @@ def write_claim(repo: str, session: str, text: str) -> str:
     return path
 
 
-def remove_claim(repo: str, session: str) -> bool:
+def remove_claim(session: str) -> bool:
     try:
-        os.remove(claim_path(repo, session))
+        os.remove(claim_path(session))
         return True
     except OSError:
         return False

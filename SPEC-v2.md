@@ -34,48 +34,62 @@ It does not mean trusting agents and hoping. Two things keep this honest, and bo
   contract nobody checks is a wish. The hook stops being the gate and becomes the **witness** and the
   **courier**; it does not stop existing.
 
-## 1. Scope
+## 1. Scope: the namespace is the local filesystem
 
-A **scope** is a set of **resources** an agent reserves before it works. A resource is any name the
-implementation and its agents agree on. Paths are the obvious ones and they are not the only ones:
+A **scope** is a set of **resources** an agent reserves before it works — and a resource is a
+**canonical absolute filesystem path**: `realpath` + `normcase`, the same canonicalisation the v1
+lockfile has always applied to repos. Exactly two forms exist:
 
-| resource            | reserves                                                          |
-|---------------------|-------------------------------------------------------------------|
-| `path:app/api/**`   | those working-copy paths (glob)                                    |
-| `git:index`         | the staging area — **the resource that makes this work, see §1a**  |
-| `git:HEAD`          | commits, rebases, checkouts: anything that moves the branch        |
-| `branch:main`       | a named branch                                                     |
-| `port:3000`         | a dev server, a debugger, anything a second agent would fight over |
+| resource                     | reserves                                              |
+|------------------------------|-------------------------------------------------------|
+| `<canonical-path>`           | one file                                              |
+| `<canonical-path>/**`        | a subtree                                             |
 
-Resources MUST have a defined **overlap** relation. Two scopes **conflict** iff any resource in one
-overlaps any resource in the other. For `path:` globs, overlap is glob intersection; for opaque
-names, string equality.
+Agents spell paths relative to the checkout they name (`api/**` for `<repo>/api/**`; `**` alone is
+the whole checkout — the degenerate case, spelt out), and the implementation canonicalises before
+storing. Overlap is the **prefix relation** — decidable always — so a conflict MUST name the exact
+**intersection**, and "come back narrower" is *computed*, never guessed.
+
+One namespace, deliberately, and each exclusion is an argument, not an omission:
+
+- **general globs** (`src/*.py`) have no decidable overlap. A scope system that is unsure whether
+  two regions touch hands one region to two agents and tells each it is alone. Rejected at declare.
+- **opaque names** (`port:3000`, `branch:main`) are contracts no witness can check — their
+  violations surface as two dev servers fighting, never as a line on the tape. Not reservable until
+  one earns its way in *with* a witness.
+- **aliasing is dead by construction.** Case, symlinks, junctions, `..`, drive spellings all
+  canonicalise to one string — so "whom do we inform?" is always answerable, point-to-point, from
+  the claim store. The claim store is the routing table; overlap computes the addressees; nothing
+  is ever broadcast.
 
 Paths that **git ignores are not reservable and are never observed** — the same rule as v1's
 fingerprint. Without it, `node_modules/`, `dist/` and `.pytest_cache/` make every scope conflict with
 every other scope, every time, and the protocol dies of false positives in an afternoon.
 
-### 1a. `git:index` is not a nicety, it is the reason resource scopes exist
+### 1a. The index is a file, and that is the reason this works
 
-Take path scopes alone. Agent A holds `path:api/**`, agent B holds `path:web/**`, and they edit
+Take source-path scopes alone. Agent A holds `api/**`, agent B holds `web/**`, and they edit
 concurrently — which is the entire point. Then A runs `git add -A && git commit`.
 
 It sweeps B's half-finished edits into A's commit. **That is the founding incident of this library**,
-and path-only scopes hand it straight back: in v1 it is prevented only as a side effect of B never
-being able to edit at all while A holds the checkout.
+and source-path scopes alone hand it straight back: in v1 it is prevented only as a side effect of B
+never being able to edit at all while A holds the checkout.
 
 It cannot be prevented by inspection — knowing that a command is a whole-tree stage means reading the
 command, and v1 §7a is the proof that this is not decidable.
 
-Resource scopes dissolve it without anyone reading anything. **An agent that intends to commit MUST
-reserve `git:index` and `git:HEAD`.** Commits serialise. Nobody parsed a command line to get there.
+The filesystem namespace dissolves it without adding anything: **the staging area was never anything
+but a file.** `git:index` is `<repo>/.git/index`; `git:HEAD` is `<repo>/.git/HEAD`. **An agent that
+intends to commit MUST reserve `<repo>/.git/index`** — an ordinary path, in the ordinary namespace,
+with the ordinary overlap. Commits serialise. Nobody parsed a command line, and nobody had to invent
+a second kind of resource to get there.
 
-### 1b. …and `git:index` MUST be held briefly, or v2 collapses back into v1
+### 1b. …and the index MUST be held briefly, or v2 collapses back into v1
 
 **Every writing session in the tapes moved HEAD — 13 out of 13 (§10.1).** Every writer commits. So
-`git:index` is not an occasional resource, it is one that *every* writer needs.
+`.git/index` is not an occasional resource, it is one that *every* writer needs.
 
-Which sets a hard constraint the obvious design would have got wrong: **`git:index` MUST be acquired
+Which sets a hard constraint the obvious design would have got wrong: **the index MUST be reserved
 immediately before a commit and released immediately after it.** It MUST NOT be held for the life of
 a scope. If a session reserves the index when it declares, then every writer conflicts with every
 other writer for its whole lifetime — which is the v1 whole-checkout mutex, rebuilt at greater cost
@@ -92,11 +106,16 @@ reach the channel, including one that is currently blocked, wedged, or being ask
 up.** That property is not a convenience here; it is what makes the channel a channel.
 
 ```
-declare(repo, scope, intent)   -> granted | conflict(with: [{agent, scope, intent, since}])
+declare(repo, scope, intent)   -> granted | conflict(with: [{agent, scope, intent, since,
+                                                             intersection}])
 extend(repo, add)              -> granted | conflict(...)          # widening: see §5
 release(repo, drop)            -> ok                               # narrowing, or letting go
 scopes(repo)                   -> who holds what, and why
 ```
+
+`intersection` is not decoration: it is the exact overlapping region, computable because the
+namespace is canonical paths (§1), and it is what turns "denied" into "subtract exactly this and
+carry on".
 
 **`declare` is all-or-nothing.** An agent states its whole scope up front and is granted all of it or
 none of it. This is conservative two-phase locking, and it is *meant* to be the reason v2 has no
@@ -166,7 +185,21 @@ That single rule is what makes v2 safe to adopt:
 - a legacy or third-party harness costs nothing and breaks nothing;
 - **v1 is the degenerate case of v2** — the state in which every agent asks for everything.
 
+And the equivalence MUST hold **in both directions**, because the two regimes coexist on one
+machine. A live v1 lock on a checkout reads to scoped agents as a claim on `<checkout>/**`: it
+refuses a `declare` over it, and it blocks a scoped agent's work inside it, exactly as a claim
+would. The session that took the whole-checkout lock was *promised* the whole checkout, and a
+reservation is not a priesthood the mutex stops applying to. (The first trial build implemented the
+equivalence in one direction only — undeclared sessions were held out by claims, but scoped agents
+sailed over v1 locks — and that is the founding incident with a reservation as the weapon.)
+
 Migration is therefore not a flag day. It is agents learning to ask for less.
+
+MCP is never gated for the undeclared either. §7c does not have a scope-shaped exception: the
+teaching refusal an undeclared session receives applies to its declared writes and shells, never to
+its MCP calls — **`declare_scope` is itself an MCP call**, and a refusal that names the way in must
+not stand in front of the door. (Also shipped wrong in the first trial build, which is why it is
+spelt out here.)
 
 ## 5. Widening, which is the one genuinely hard operation
 
@@ -241,7 +274,7 @@ MUST:
 2. **tell the victim**, through the channel — this is what the duplex channel is *for*;
 3. **refuse that agent's further declared writes** until it re-declares a scope that covers what it
    is evidently doing, or reverts. It cannot unwrite the bytes; it can be stopped from continuing;
-4. where the violation is a **commit** (`git:HEAD` moved with out-of-scope paths in it), say so with
+4. where the violation is a **commit** (HEAD moved with out-of-scope paths in it), say so with
    the sha — a commit is the one violation that is cleanly **recoverable**, and the message MUST say
    `git revert`/`git reset` rather than leaving the agent to work it out.
 
@@ -309,7 +342,7 @@ handback (§5, §5a); fail-open-loudly; the off switch (§7 obligation 11); **an
    **Survives, because it is not about behaviour:**
 
    - **13 of 13 writing sessions committed.** Agents will still commit under v2 — this is a fact
-     about working with git, not about the lock. `git:index` is therefore needed by *every* writer,
+     about working with git, not about the lock. `.git/index` is therefore needed by *every* writer,
      which is what forces §1b: take it briefly, never hold it for the life of a scope.
    - **both observed collisions were genuinely disjoint** — different *directories*, not merely
      different files. That is an observation of what happened, not a prediction: twice out of twice,

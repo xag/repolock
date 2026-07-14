@@ -663,8 +663,9 @@ def format_scope_conflict(verdict: dict, what: str = "") -> str:
     """A conflict is an ANSWER, not a refusal (SPEC-v2 §2).
 
     v1 tells a blocked agent who holds the checkout and hands it a way to wait. It is still, in the
-    end, a closed door. Here the agent is told exactly which region is taken, by whom, for what — and
-    **where it may go instead**. It does not wait; it takes a scope that fits and carries on.
+    end, a closed door. Here the agent is told exactly which region is taken, by whom, for what,
+    down to the INTERSECTION — the paths are canonical, so the overlap is computable, not guessed —
+    and where it may go instead. It does not wait; it takes a scope that fits and carries on.
     """
     out = ["SCOPE CONFLICT — another agent has reserved part of what you asked for."]
     if what:
@@ -673,17 +674,31 @@ def format_scope_conflict(verdict: dict, what: str = "") -> str:
         out.append(f"  taken     : {', '.join(c['scope'])}")
         out.append(f"    by      : agent {c['session']} — {c['intent'] or 'no stated intent'} "
                    f"({c['held_for']}s)")
+        if c.get("intersection"):
+            out.append(f"    overlap : {', '.join(c['intersection'])}   <- subtract exactly this")
     if free := verdict.get("free_hint"):
         out += ["", f"  FREE RIGHT NOW: {', '.join(free)}"]
     out += [
         "",
         "You are not blocked — you are being told where the work is. Pick one:",
-        "  * declare_scope(repo, [<something narrower that does not overlap>]) and get on with it;",
+        "  * declare_scope(repo, [<your scope minus the overlap above>]) and get on with it;",
         "  * split the work: file an issue for the part inside their region, and do the rest now;",
         "  * ask them to give it up: please_narrow is not built yet — say so to your human.",
         "Do NOT write into their region anyway. It is observed, and it will be reported to them.",
     ]
     return "\n".join(out)
+
+
+def v1_lock_blocks(repo: str, session: str, intent: str) -> str | None:
+    """A live v1 lock, seen from the scoped side. The holder of the whole-checkout lock was promised
+    the whole checkout, so a scoped agent's work here must wait exactly as v1 work would — a
+    reservation is not a priesthood the mutex stops applying to. (scope.declare enforces the same
+    fact at declaration time; this catches the lock that ARRIVES after the scope did.)"""
+    v = lock.status(repo)
+    if (v["status"] == "locked" and not v.get("takeable")
+            and (v.get("lock") or {}).get("session") != session):
+        return format_held(repo, attempted=intent, session=session)
+    return None
 
 
 def scope_gate(repo: str, session: str, path: str, intent: str) -> tuple[str | None, list[str]]:
@@ -694,13 +709,14 @@ def scope_gate(repo: str, session: str, path: str, intent: str) -> tuple[str | N
     refusal is useful in a way v1's never was — the agent is not told to wait, it is told to declare
     the region it evidently meant to write.
     """
-    my = scope.scope_of(repo, session)
-    if scope.covers(my, path):
-        scope.renew(repo, session)
+    target = scope.canon(path)
+    my = scope.scope_of(session)
+    if scope.covers(my, target):
+        scope.renew(session)
         return None, []
 
     rel = _rel(repo, path)
-    verdict = scope.declare(repo, session, list(my) + [rel], intent)   # can we just take it?
+    verdict = scope.declare(repo, session, list(my) + [target], intent)  # can we just take it?
     if verdict["status"] == "granted":
         return None, [f"repo-scope: extended your scope to cover {rel} (nobody else had claimed it)."]
     if verdict["status"] == "conflict":
@@ -768,12 +784,17 @@ def witness_scoped(repo: str, session: str) -> list[str]:
     if not written:
         return []                                   # it read. It cost nobody anything.
 
-    scope.renew(repo, session)
+    # The witness names repo-relative paths; claims live in the one canonical namespace. Convert
+    # HERE, at the seam, so nothing downstream ever compares a relative path against an absolute
+    # claim and silently misses.
+    written = [scope.canon(os.path.join(repo, p)) for p in written]
+
+    scope.renew(session)
     notes = []
-    if bad := scope.violations(repo, session, written):
+    if bad := scope.violations(session, written):
         notes.append(format_violation(repo, session, bad,
                                       head_moved=before.get("HEAD") != after.get("HEAD")))
-    if loose := scope.stray(repo, session, written):
+    if loose := scope.stray(session, written):
         notes.append(
             "repo-scope: you wrote outside your declared scope, into a region nobody has claimed:\n"
             + "\n".join(f"  {p}" for p in loose[:8])
@@ -784,15 +805,15 @@ def witness_scoped(repo: str, session: str) -> list[str]:
 
 
 def scope_blocks_an_undeclared_session(repo: str, session: str) -> str | None:
-    """An agent that has not declared holds `**` (SPEC-v2 §4), and `**` overlaps every scope. So it
-    cannot walk into a checkout somebody is holding a region of.
+    """An agent that has not declared works under the v1 whole-checkout mutex — so it cannot walk
+    into a checkout somebody has reserved a region of, any more than it could walk into a v1 lock.
 
     And THIS is the migration path, which is why the message matters more than the refusal: the way
     out is not to wait, it is to declare. The refusal teaches the protocol to the agent that has
     never heard of it, at the only moment it has a reason to care.
     """
-    claims = [c for c in scope.live(repo) if c["session"] != session]
-    if not claims or scope.declared(repo, session):
+    claims = [c for c in scope.touching(repo) if c["session"] != session]
+    if not claims or scope.declared(session):
         return None
 
     out = ["THIS CHECKOUT IS SHARED — another agent has reserved part of it, and you have "
@@ -810,19 +831,22 @@ def scope_blocks_an_undeclared_session(repo: str, session: str) -> str | None:
         "    declare_scope(repo, ['src/thing/**', 'tests/thing/**'], intent='what you are doing')",
         "",
         "Then write inside it freely. If you find you need more, extend_scope() — it never blocks,",
-        "it just tells you if someone is there. Reserve `git:index` before you commit.",
+        "it just tells you if someone is there. Reserve `.git/index` before you commit, and release",
+        "it after: `git add -A` sweeps every dirty file in the checkout, including theirs.",
     ]
     return "\n".join(out)
 
 
 def _rel(repo: str, path: str) -> str:
+    """For DISPLAY only — messages read better in repo-relative terms. Claims never store this."""
     p = os.path.abspath(path).replace("\\", "/")
     r = env.canonical(repo).replace("\\", "/")
     return p[len(r):].lstrip("/") if p.lower().startswith(r.lower()) else p
 
 
 def scope_hand_back(repo: str, session: str) -> None:
-    """A scoped session going home releases its region against a clean tree — same rule as v1 §5,
-    same reason: a region parked on half-finished work blocks everyone and protects nobody."""
-    if scope.declared(repo, session) and not env.git_dirty(repo):
-        scope.release(repo, session)
+    """A scoped session going home releases what it held IN THIS CHECKOUT against a clean tree —
+    same rule as v1 §5, same reason: a region parked on half-finished work blocks everyone and
+    protects nobody. Claims in other checkouts are untouched; their own Stop settles them."""
+    if scope.declared(session) and not env.git_dirty(repo):
+        scope.release_under(session, repo)

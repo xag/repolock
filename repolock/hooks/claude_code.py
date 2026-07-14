@@ -67,7 +67,13 @@ WRITING_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 # under it by design, and observing across it would report the holder's honest work as our own
 # collision. They also touch ~/.repolock and never the working copy, so there is nothing to see.
 OUR_MCP_TOOLS = {"lock_status", "lock_wait", "lock_drift", "force_unlock", "lock_debug",
-                 "lock_disable", "lock_enable", "lock_switch"}
+                 "lock_disable", "lock_enable", "lock_switch",
+                 # The channel itself (SPEC-v2 §2). These four were MISSING from this set in the
+                 # first trial build, which combined with a mis-ordered deny to produce the worst
+                 # sentence in this library's history: the refusal told a blocked agent "the way
+                 # out is declare_scope" and then gated declare_scope. The door out was locked
+                 # from the outside, and the protocol could never gain a second participant.
+                 "declare_scope", "extend_scope", "release_scope", "scopes"}
 
 
 def _watched_mcp(tool: str) -> bool:
@@ -166,14 +172,19 @@ def pre_tool_use(payload: dict) -> None:
     intent = _intent(payload)
 
     # --- SPEC-v2: has this agent declared a scope? -----------------------------------------------
-    # If it has, it works under the reservation it negotiated and never touches the v1 whole-repo
-    # lock. If it has not, it holds `**` and everything below is v1, unchanged — which is the
-    # property that makes the trial safe: silence is exactly as safe as it was yesterday.
-    if scope.declared(repo, session):
+    # If it has, it works under the reservation it negotiated. If it has not, everything below is
+    # v1, unchanged — which is the property that makes the trial safe: silence is exactly as safe
+    # as it was yesterday.
+    if scope.declared(session):
         if tool.startswith("mcp__"):
             if _watched_mcp(tool):
                 common.observe_scoped(repo, session)     # witnessed, never gated (§7c stands)
             return
+        # A live v1 lock is a claim on the whole checkout, and it binds scoped agents too — the
+        # session that took it was promised everything. Without this check a reservation would be
+        # a priesthood the mutex stops applying to, and mixed fleets would interleave silently.
+        if denial := common.v1_lock_blocks(repo, session, intent):
+            _deny(denial)
         if known_write:
             denial, notes = common.scope_gate(repo, session, _target_path(payload), intent)
             if denial:
@@ -184,17 +195,20 @@ def pre_tool_use(payload: dict) -> None:
         common.observe_scoped(repo, session)             # a shell: witnessed too (§7, §7a)
         return
 
-    # An undeclared agent is `**`, so it overlaps anyone holding a region. The refusal TEACHES the
-    # protocol — the way out is not to wait, it is to say what you are going to touch.
-    if denial := common.scope_blocks_an_undeclared_session(repo, session):
-        _deny(denial)
-
-    # MCP: take the before-picture and get out of the way. No lock, no refusal, ever. This channel
-    # has to stay open or the off switch, the waiter and the blocked session's "file an issue and
-    # move on" all end up behind the gate they exist to get around (SPEC.md §7c).
+    # MCP FIRST, before the undeclared-session refusal below, and the order is load-bearing —
+    # §7c does not have a scope-shaped exception. The first trial build had these two blocks the
+    # other way round, so the moment any agent held a scope, an undeclared session in that repo was
+    # denied its MCP calls — INCLUDING declare_scope, the exact tool the refusal names as the way
+    # in. No lock, no refusal, ever, means here too.
     if tool.startswith("mcp__"):
         common.observe(repo, session)
         return
+
+    # An undeclared agent is working under the v1 mutex, so it overlaps anyone holding a region.
+    # The refusal TEACHES the protocol — the way out is not to wait, it is to say what you are
+    # going to touch.
+    if denial := common.scope_blocks_an_undeclared_session(repo, session):
+        _deny(denial)
 
     if known_write:
         denial, notes = common.gate(repo, session, intent)
@@ -243,7 +257,7 @@ def post_tool_use(payload: dict) -> None:
 
     # SPEC-v2: the witness. A scoped agent's shell and MCP calls were not gated, so this is where we
     # find out what they did — and, if it landed in someone else's region, say so to both of them.
-    if scope.declared(repo, session):
+    if scope.declared(session):
         if not known_write:
             for note in common.witness_scoped(repo, session):
                 _say(note)

@@ -252,7 +252,7 @@ def lock_switch() -> str:
 def _fmt_scopes(repo: str) -> str:
     from repolock import scope
 
-    claims = scope.live(repo)
+    claims = scope.touching(repo)
     if not claims:
         return f"{env.canonical(repo)}: nobody has reserved anything. It is all yours."
     out = [f"{env.canonical(repo)} — {len(claims)} agent(s) at work:"]
@@ -271,26 +271,29 @@ def declare_scope(repo: str, scope: list[str], session_id: str, intent: str = ""
     you hold them out. Declare a region and you get that region, exclusively, while everyone else
     gets on with theirs.
 
-    `scope` is a list of resources. Only these forms exist, because they are the ones whose overlap
-    can be computed exactly, and a scope system that is unsure whether two regions touch is worse
-    than none:
+    `scope` is a list of **filesystem paths** — that is the whole vocabulary, one namespace whose
+    overlap is always computable, so a conflict can name the exact intersection instead of guessing:
 
-        "src/api/**"     a subtree
+        "src/api/**"     a subtree (relative paths resolve against `repo`)
         "src/api/x.py"   one file
-        "git:index"      THE STAGING AREA — take this before you commit. `git add -A` sweeps up
-                         every dirty file in the checkout, including the half-finished work of the
-                         agent next door, and commits it as yours. Reserve the index, stage YOUR
-                         paths by name, commit, release it.
-        "git:HEAD"       commits, rebases, checkouts
-        "port:3000"      a dev server, a debugger — anything a second agent would fight over
-        "**"             everything (the default, and what you get by saying nothing)
+        ".git/index"     THE STAGING AREA — a file like any other, and the one to reserve BEFORE
+                         you commit. `git add -A` sweeps up every dirty file in the checkout,
+                         including the half-finished work of the agent next door, and commits it
+                         as yours. Reserve the index, stage YOUR paths by name, commit, release it.
+        ".git/HEAD"      commits, rebases, checkouts — reserve for history-moving operations
+        "**"             the whole checkout (the default, and what you get by saying nothing)
+
+    Spelling does not matter — case, symlinks, `..`, drive letters all resolve to one canonical
+    path, so two agents cannot hold one file under two names. What is not a path (a port, a
+    service) is not reservable, deliberately: a name no witness can check is not a contract.
 
     `session_id` is your harness session id — the same one the hook sees. Pass it exactly.
 
-    Returns `granted`, or a `conflict` naming who holds what AND what is free right now. A conflict
-    is an answer, not a wall: take a narrower scope and carry on, or split the work and file an issue
-    for the part you cannot have. **Declaring is all-or-nothing** — you get the whole scope or none
-    of it, which is what keeps two agents from deadlocking on each other's regions.
+    Returns `granted`, or a `conflict` naming who holds what, the exact OVERLAP to subtract, and
+    what is free right now. A conflict is an answer, not a wall: take a narrower scope and carry
+    on, or split the work and file an issue for the part you cannot have. **Declaring is
+    all-or-nothing** — you get the whole scope or none of it, which is what keeps two agents from
+    deadlocking on each other's regions.
 
     Writes INSIDE your scope are yours. Writes outside it are watched, and if they land in someone
     else's region, both of you are told. Nothing stops you — this is a channel, not a cage — but do
@@ -300,7 +303,7 @@ def declare_scope(repo: str, scope: list[str], session_id: str, intent: str = ""
 
     v = sc.declare(repo, session_id, scope, intent)
     if v["status"] == "granted":
-        return (f"GRANTED — {', '.join(v['claim']['scope'])} on {v['repo']}.\n"
+        return (f"GRANTED — {', '.join(v['claim']['scope'])}.\n"
                 f"Write freely inside it. extend_scope() if you need more (it never blocks), and "
                 f"release_scope() when you are done.\n\n{_fmt_scopes(repo)}")
     if v["status"] == "rejected":
@@ -310,6 +313,8 @@ def declare_scope(repo: str, scope: list[str], session_id: str, intent: str = ""
     for c in v["conflicts"]:
         out.append(f"  {', '.join(c['scope'])} — agent {c['session']} "
                    f"({c['intent'] or 'no stated intent'}, {c['held_for']}s)")
+        if c.get("intersection"):
+            out.append(f"    overlap: {', '.join(c['intersection'])}   <- subtract exactly this")
     if v.get("free_hint"):
         out.append(f"\nFREE RIGHT NOW: {', '.join(v['free_hint'])}")
     out.append("\nTake a narrower scope and carry on, or file an issue for the part you cannot have "
@@ -320,7 +325,8 @@ def declare_scope(repo: str, scope: list[str], session_id: str, intent: str = ""
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, idempotentHint=True))
 def extend_scope(repo: str, add: list[str], session_id: str) -> str:
     """Widen the scope you already hold — for when you discover mid-task that you need one more
-    module. **It never blocks.** It grants, or it tells you who is there.
+    module. **It never blocks.** It grants, or it tells you who is there and exactly where you
+    overlap.
 
     If it conflicts, do NOT sit and wait for them while holding what they want: that is the one way
     two agents can deadlock here. Commit what you have, release, and re-declare from a clean tree —
@@ -330,26 +336,28 @@ def extend_scope(repo: str, add: list[str], session_id: str) -> str:
 
     v = sc.extend(repo, session_id, add)
     if v["status"] == "granted":
-        return f"GRANTED — your scope is now {', '.join(v['claim']['scope'])} on {v['repo']}."
+        return f"GRANTED — your scope is now {', '.join(v['claim']['scope'])}."
     if v["status"] == "rejected":
         return f"REJECTED — {v['reason']}"
     out = ["CONFLICT — you cannot have that; it is somebody's."]
     for c in v["conflicts"]:
         out.append(f"  {', '.join(c['scope'])} — agent {c['session']} "
                    f"({c['intent'] or 'no stated intent'})")
+        if c.get("intersection"):
+            out.append(f"    overlap: {', '.join(c['intersection'])}")
     out.append("\nDo not block on this. Commit and re-declare, or split the work off into an issue.")
     return "\n".join(out)
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, idempotentHint=True))
 def release_scope(repo: str, session_id: str, drop: list[str] | None = None) -> str:
-    """Give back your whole scope, or narrow it by dropping part (`drop`). Releasing what you are no
-    longer using is how the next agent gets to work — and `git:index` in particular should be held
-    for the length of a commit and not one second more."""
+    """Give back your whole scope, or narrow it by dropping part (`drop`, resolved against `repo`).
+    Releasing what you are no longer using is how the next agent gets to work — and `.git/index` in
+    particular should be held for the length of a commit and not one second more."""
     from repolock import scope as sc
 
-    v = sc.release(repo, session_id, drop)
-    left = ", ".join(v["scope"]) if v["scope"] else "nothing (you are back to the default, `**`)"
+    v = sc.release(session_id, drop, anchor=repo)
+    left = ", ".join(v["scope"]) if v["scope"] else "nothing (you are back under the v1 whole-checkout lock)"
     return f"Released. You now hold: {left}.\n\n{_fmt_scopes(repo)}"
 
 
