@@ -90,7 +90,7 @@ return verdicts, never raise: an exception in a hook is a session that cannot ed
   Force is the human's deliberate override, never the routine path.
 - When the holder goes **idle** (hands control back to its human):
   - clean tree → release; holding would be pure obstruction;
-  - dirty tree → the handback itself MUST be refused, where the harness allows it (see §7c). The
+  - dirty tree → the handback itself MUST be refused, where the harness allows it (§7, obligation 5). The
     holder is told to **commit** its work, **ignore** the artifact, or **stash** the scrap; the
     lock then releases itself against the clean tree, and no idle-dirty lock is ever created.
   - dirty tree, and the holder declined when asked → record `idle_since` and `dirty_at_idle` and
@@ -168,7 +168,8 @@ A harness adapter MUST:
 
    - **block**, for a session with nothing else to do: the reference implementation exposes
      `lock_wait` as an MCP tool, because the hook does not gate MCP tools — which is also the only
-     reason #4 could be reported at all, by sessions that could not run a shell;
+     reason #4 could be reported at all, by sessions that could not run a shell. §7c turns that
+     from a happy accident of the matcher into a requirement, and says what it costs;
    - **subscribe**, for a session that has other work: an agent turn cannot be interrupted and
      nothing can push into it, so the ONLY thing that can wake one is its harness noticing that a
      background task it launched has exited. The adapter MUST therefore let a blocked session launch
@@ -281,6 +282,55 @@ and *reported* a collision it had failed to prevent. That leaves a window, reach
 construction, in which two sessions write one checkout — and a known-reachable hole in a mutex is
 not a residual risk, it is the absence of the mutex on that path. It was rejected. An adapter MUST
 NOT implement it.
+
+## 7c. The ungated channel: one class of tool MUST NOT be gated, and it is watched instead
+
+Every obligation above assumes the adapter may refuse a tool. This one says where it may not, and
+it is not an oversight being excused after the fact — it is forced, by the rest of the protocol.
+
+**A harness's out-of-process tool channel (in Claude Code and Cursor: MCP) MUST NOT be gated.** Not
+"is not yet"; MUST NOT. Three of this document's own requirements are calls on that channel, and all
+three are needed at exactly the moment the lock is doing damage:
+
+- obligation 9 — the blocked session's **blocking wait**. It cannot wait by itself: waiting means
+  `sleep`, `sleep` is a shell, and the shell is what was refused;
+- obligation 11 — the **off switch**, which "must not be a shell command", because when the lock
+  misfires it refuses your shell;
+- obligation 8's third route — **"file an issue and move on"**, which is how xag/repolock#4 (a lock
+  that had refused every shell on the machine) came to be reported at all.
+
+A gate on this channel stands in front of all three. There is no ordering of these requirements in
+which it is safe: the tool that turns the lock off cannot be reachable only when the lock is off.
+
+So the adapter **MUST watch that channel rather than gate it**, and the difference is exact:
+
+- take the fingerprint (§7b) before such a call and again after it;
+- *unmoved* → nothing happened. **Take no lock**, refuse nothing, charge nothing. This is almost
+  every call: a mail search cannot write a working copy;
+- *moved* → that tool wrote, as a fact. The session **MUST take the lock**, and holds it exactly as
+  a shell that wrote does;
+- *moved, and another session holds the lock* → the two have written one checkout. The adapter MUST
+  say so, to the session that did it, **naming the holder and telling it to stop writing**. It
+  cannot undo the write; it can refuse to let it be silent.
+
+An adapter MUST NOT watch its own lock tools this way. A blocking wait sits there *on purpose* while
+the holder works, so the tree moves under it by design, and an adapter observing across it would
+report the holder's honest work as its own collision.
+
+### What this costs, stated plainly
+
+**This is detection, not exclusion, and on this one path the mutex does not hold.** §7b calls that,
+for a shell, "not a residual risk but the absence of the mutex on that path", and refuses to ship
+it. The judgement differs here for one reason and it should be checked rather than trusted: on the
+shell path, holding through the unknown costs a colliding session the length of one command. On this
+path it would cost the protocol every one of its escape hatches — and a lock whose off switch is
+behind the gate is not a safer lock, it is an unrecoverable one.
+
+An implementation MUST therefore carry this as a **stated, gated debt**, not as a caveat and not as
+a hypothesis: the hole is known-reachable, so it is not a belief awaiting evidence. It is discharged
+if and when a harness gives the channel a *declared* write target — a path in the tool input, the
+way `Edit` carries one — at which point that tool joins obligation 1 and is gated before it runs,
+with no guessing and no window.
 
 ## Non-goals
 

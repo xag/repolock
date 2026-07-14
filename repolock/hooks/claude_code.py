@@ -19,6 +19,11 @@ Four events, and the split between the first two is the whole of v1 (see hooks/c
                someone else holds it, we have just collided — say so). Unmoved => it was a read,
                whatever it looked like, and it is charged nothing.
 
+               An MCP tool goes through both events and is refused by neither: it is WATCHED, not
+               gated. The protocol's own escape hatches are MCP calls — the off switch, the waiter,
+               and the blocked session's "file an issue and move on" — so a gate here would stand in
+               front of every way out of a misfiring lock. SPEC.md §7c states the trade in full.
+
   Stop         the model is handing control back to the human. Clean tree => release (a session
                waiting on someone at lunch must not starve every other session). Dirty tree => hold,
                mark it idle, let the declared lease run out; handing over a checkout full of
@@ -29,8 +34,8 @@ Four events, and the split between the first two is the whole of v1 (see hooks/c
 
 Install: a `hooks` block in ~/.claude/settings.json (user scope, so every repo on the machine is
 guarded, not just one) wiring PreToolUse and PostToolUse (matcher Edit|Write|MultiEdit|NotebookEdit|
-Bash|PowerShell — the shells BOTH have to be there; on Windows PowerShell is the one that gets
-used), Stop, and SessionStart to run this script via a python that can import `repolock`, by
+Bash|PowerShell|mcp__.* — the shells BOTH have to be there; on Windows PowerShell is the one that
+gets used), Stop, and SessionStart to run this script via a python that can import `repolock`, by
 absolute path — at user scope $CLAUDE_PROJECT_DIR points at whatever project the session is in.
 
 Kill switch: `~/.repolock/DISABLED` (see env.disabled) makes every event a no-op, including in
@@ -55,6 +60,19 @@ except ImportError:                               # run straight from a checkout
 # input carries the path, so the lock target is a fact too. Everything else is "unknown", including
 # every shell, and unknown is no longer a synonym for either "read" or "write".
 WRITING_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
+
+# Our OWN MCP tools, matched on the tool's name rather than its server's, because the server can be
+# registered under any name the user likes. These are never watched and never gated: `lock_wait` in
+# particular blocks for minutes ON PURPOSE, waiting for the holder to finish — so the tree moves
+# under it by design, and observing across it would report the holder's honest work as our own
+# collision. They also touch ~/.repolock and never the working copy, so there is nothing to see.
+OUR_MCP_TOOLS = {"lock_status", "lock_wait", "lock_drift", "force_unlock", "lock_debug",
+                 "lock_disable", "lock_enable", "lock_switch"}
+
+
+def _watched_mcp(tool: str) -> bool:
+    """An MCP tool we take a fingerprint around. Never one we would refuse — see common.observe()."""
+    return tool.startswith("mcp__") and tool.rsplit("__", 1)[-1] not in OUR_MCP_TOOLS
 
 
 def _deny(reason: str) -> None:
@@ -127,6 +145,11 @@ def _target(payload: dict) -> tuple[str | None, bool]:
 
 
 def pre_tool_use(payload: dict) -> None:
+    tool = payload.get("tool_name") or ""
+    if tool.startswith("mcp__") and not _watched_mcp(tool):
+        return                       # our own lock tools. Out before we spend a git call or an
+                                     # import on them: they cannot move the tree, and one of them is
+                                     # the off switch — the last thing to make slow or clever.
     repo, known_write = _target(payload)
     if not repo:
         return                       # not a git checkout — nothing to protect, nothing to lock
@@ -134,6 +157,13 @@ def pre_tool_use(payload: dict) -> None:
     _record()
     session = payload.get("session_id") or "unknown"
     intent = _intent(payload)
+
+    # MCP: take the before-picture and get out of the way. No lock, no refusal, ever. This channel
+    # has to stay open or the off switch, the waiter and the blocked session's "file an issue and
+    # move on" all end up behind the gate they exist to get around (SPEC.md §7c).
+    if tool.startswith("mcp__"):
+        common.observe(repo, session)
+        return
 
     if known_write:
         denial, notes = common.gate(repo, session, intent)
@@ -169,12 +199,25 @@ def post_tool_use(payload: dict) -> None:
     This is the half that makes the pessimistic hold affordable. Without it, every `cat` would keep
     a ten-minute lease and we would be back in #4 within the hour.
     """
+    tool = payload.get("tool_name") or ""
+    if tool.startswith("mcp__") and not _watched_mcp(tool):
+        return                       # our own lock tools — nothing was observed, nothing to settle
+
     repo, known_write = _target(payload)
     if not repo or known_write:
         return                       # a declared write took the lock before it ran, and keeps it
 
     _record()
     session = payload.get("session_id") or "unknown"
+
+    # The MCP half of the same question, asked without a lock having been staked on the answer:
+    # did the tree move? If it did, that tool wrote, and the session becomes the holder here rather
+    # than at the gate — because there was no gate.
+    if tool.startswith("mcp__"):
+        for note in common.settle_observed(repo, session, _intent(payload)):
+            _say(note)
+        return
+
     for note in common.settle_unknown(repo, session):
         _say(note)
 
@@ -230,9 +273,14 @@ HANDLERS = {
 
 # Matchers per event. The shells BOTH have to be in the PreToolUse/PostToolUse matchers — on Windows
 # PowerShell is the one that actually gets used, and a missing PostToolUse is bug #4 wearing a hat.
+#
+# `mcp__.*` is in both, and it is NOT there to gate anything: the hook watches those calls and
+# refuses none of them (SPEC.md §7c). Both events are required for the same reason as the shells,
+# though — the "after" picture is meaningless without the "before" one — and a matcher that caught
+# the MCP write and then had nowhere to report it would be worse than not looking.
 EVENTS = {
-    "PreToolUse": "Edit|Write|MultiEdit|NotebookEdit|Bash|PowerShell",
-    "PostToolUse": "Bash|PowerShell",
+    "PreToolUse": "Edit|Write|MultiEdit|NotebookEdit|Bash|PowerShell|mcp__.*",
+    "PostToolUse": "Bash|PowerShell|mcp__.*",
     "Stop": None,
     "SessionStart": None,
 }

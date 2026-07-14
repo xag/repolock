@@ -425,6 +425,105 @@ def test_a_write_outside_every_repo_takes_no_lock(repo, tmp_path):
     assert res.returncode == 0
 
 
+# --- the ungated channel: MCP is watched, never gated (SPEC.md §7c) -----------------------------
+
+def claude_mcp(repo, session, tool, effect=None):
+    """An MCP tool call, run the way the harness runs one: PreToolUse, the call, PostToolUse.
+
+    `effect` is a shell command standing in for whatever the tool does out of process — a Jupyter
+    cell writing a file, a filesystem server, anything. The hooks never see it; they see the repo.
+    """
+    payload = {"tool_name": tool, "tool_input": {}, "cwd": repo, "session_id": session}
+    pre = run_hook(CLAUDE, {**payload, "hook_event_name": "PreToolUse"})
+    if pre.returncode != 0:
+        return pre
+    if effect:
+        subprocess.run(effect, cwd=repo, shell=True, capture_output=True)
+    return run_hook(CLAUDE, {**payload, "hook_event_name": "PostToolUse"})
+
+
+def test_an_mcp_write_is_caught_even_though_it_was_never_gated(repo):
+    """#3. `mcp__ide__executeCode` runs a cell that writes the tree; no matcher can know in advance
+    that it will. It is not stopped — it CANNOT be, see the test below — but the tree moved, so the
+    session is a writer, and it holds the lock from that moment like any other."""
+    assert claude_mcp(repo, "A", "mcp__ide__executeCode", effect="echo x > gen.py").returncode == 0
+
+    res = claude_edit(repo, "B")
+    assert res.returncode == 2, "an MCP tool wrote the repo and the session never took the lock"
+    assert "session A" in res.stderr
+
+
+def test_an_mcp_call_that_touches_nothing_costs_nothing(repo):
+    """The overwhelmingly common case, and the reason this must not be a pessimistic hold: a mail
+    search cannot write a working copy, and a session that ran one must not be holding a repo."""
+    assert claude_mcp(repo, "A", "mcp__claude_ai_Gmail__search_threads").returncode == 0
+    assert claude_edit(repo, "B").returncode == 0, "a read-only MCP call took the lock"
+
+
+def test_an_mcp_call_is_never_refused_even_against_a_live_holder(repo):
+    """The load-bearing half of §7c, and the one a future 'let's just add mcp__ to the matcher'
+    would break. B is locked out of this repo — that is exactly when B needs MCP most: it is where
+    the off switch lives (lock_disable), where the blocking wait lives (lock_wait), and where
+    'file an issue and move on' lives. A gate here stands in front of every way out."""
+    assert claude_edit(repo, "A").returncode == 0                   # A holds the lock
+
+    for tool in ("mcp__repo-lock__lock_disable",                    # the off switch
+                 "mcp__repo-lock__lock_wait",                       # the blocking wait
+                 "mcp__claude_ai_Dev_Tools__create_github_issue"):  # "file an issue and move on"
+        res = claude_mcp(repo, "B", tool)
+        assert res.returncode == 0, f"the lock refused {tool} — the escape hatch is behind the gate"
+
+
+def test_an_mcp_write_into_a_held_repo_is_reported_as_a_collision(repo):
+    """The honest cost of not gating, made loud. We could not stop B, so the least we owe it is the
+    truth: it has just written a checkout someone else is mid-change on, and it must stop."""
+    assert claude_edit(repo, "A").returncode == 0                   # A holds the lock
+    res = claude_mcp(repo, "B", "mcp__ide__executeCode", effect="echo x > gen.py")
+
+    assert res.returncode == 0                                      # not blocked — it never could be
+    assert "COLLISION" in res.stdout
+    assert "session A" in res.stdout
+    assert "STOP WRITING THIS REPO" in res.stdout
+
+
+def test_the_blocking_wait_is_not_mistaken_for_the_holders_write(repo):
+    """Why our own tools are not watched. `lock_wait` sits there ON PURPOSE while the holder works,
+    so the tree moves under it by design. Observing across it would take the holder's honest write,
+    attribute it to the session that was waiting, and hand that session a collision report about a
+    file it never touched."""
+    assert claude_edit(repo, "A").returncode == 0
+
+    pre = run_hook(CLAUDE, {"hook_event_name": "PreToolUse", "tool_name": "mcp__repo-lock__lock_wait",
+                            "tool_input": {}, "cwd": repo, "session_id": "B"})
+    assert pre.returncode == 0
+    subprocess.run("echo x > a.txt", cwd=repo, shell=True)          # A gets on with its work
+    post = run_hook(CLAUDE, {"hook_event_name": "PostToolUse", "tool_name": "mcp__repo-lock__lock_wait",
+                             "tool_input": {}, "cwd": repo, "session_id": "B"})
+
+    assert post.returncode == 0
+    assert "COLLISION" not in post.stdout, "B was blamed for a write it waited through"
+
+
+def test_watching_mcp_does_not_trip_the_degraded_check(repo):
+    """The two observations use separate memos, and they have to. A surviving FP memo is how the
+    hook detects that PostToolUse was never wired (and degrades rather than starving the machine).
+    An MCP observation stakes no lock on its memo, so it must never be able to raise that alarm."""
+    assert run_hook(CLAUDE, {"hook_event_name": "PreToolUse", "tool_name": "mcp__ide__executeCode",
+                             "tool_input": {}, "cwd": repo,
+                             "session_id": "A"}).returncode == 0     # a PRE with no POST after it
+
+    # The warning is printed by the PRE hook of the NEXT call, so that is the stream to read. (This
+    # test asserted on the POST hook's stdout at first, and passed for that reason alone.)
+    pre = run_hook(CLAUDE, {"hook_event_name": "PreToolUse", "tool_name": "Bash",
+                            "tool_input": {"command": "cat a.txt"}, "cwd": repo, "session_id": "A"})
+    assert pre.returncode == 0
+    assert "DEGRADED" not in pre.stdout, "a stale MCP memo was read as a missing settle hook"
+
+    run_hook(CLAUDE, {"hook_event_name": "PostToolUse", "tool_name": "Bash",
+                      "tool_input": {"command": "cat a.txt"}, "cwd": repo, "session_id": "A"})
+    assert claude_edit(repo, "B").returncode == 0, "the shell read still gave its lock back"
+
+
 # --- Claude Code (adapter #1) ---------------------------------------------------
 
 def test_claude_hook_takes_the_lock_and_holds_out_a_second_session(repo):

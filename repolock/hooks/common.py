@@ -48,6 +48,7 @@ from repolock import env, lock
 LEASE_SECONDS = 600          # renewed on every tool call; must outlast the longest single call
 SEEN_DIR = "seen"            # per-(session, repo) memory of the last HEAD seen — the drift check
 FP_DIR = "fp"                # ...and of the fingerprint taken before the tool now running
+OBS_DIR = "obs"              # ...and the one taken around an MCP call, which is watched, never gated
 TICKET_DIR = "tickets"       # ...and the one command a refused session is allowed to run
 WARNED_DIR = "warned"        # ...and whether we already told this session its install is broken
 
@@ -553,3 +554,95 @@ def settle_unknown(repo: str, session: str) -> list[str]:
     # else's uncommitted work, having written nothing ourselves, is #4 wearing a hat.
     lock.release(repo, session, force=True)
     return []
+
+
+# --- the ungated channel: MCP is watched, and never refused (SPEC.md §7c) -----------------------
+
+def observe(repo: str, session: str) -> None:
+    """The before-picture for an MCP tool call. It takes NO lock and it can refuse NOTHING.
+
+    That restraint is the whole of it, and it is not timidity — it is the protocol. Three things
+    this library provides depend on an MCP call always getting through, and every one of them is
+    needed at the moment the lock is at its worst:
+
+      lock_wait      how a blocked session waits at all (`sleep` is a shell; the shell is what was
+                     refused);
+      lock_disable   the off switch, which must not be spelled as a command in a terminal the lock
+                     is busy refusing;
+      "file an issue and move on"  the third route format_held() offers a blocked session — and the
+                     route by which #4, a lock that had refused every shell on the machine, got
+                     reported in the first place.
+
+    A gate across MCP would sit in front of all three, so there is no version of this that both
+    gates MCP and keeps the escape hatch. We watch instead: settle_observed() reads the repo
+    afterwards and claims the lock if the tree moved.
+
+    A memo left behind here is inert — no lock rides on it, so a half-wired install (PostToolUse
+    missing the mcp matcher) costs a stale file and nothing else. That is deliberate, and it is why
+    this uses a memo of its own rather than FP_DIR: a surviving FP_DIR memo is how hold_unknown
+    detects that the settle hook is not wired, and an MCP observation must never trip that alarm.
+    """
+    _remember(OBS_DIR, session, repo, lock.fingerprint(repo))
+
+
+def format_collision(repo: str, session: str, intent: str) -> str:
+    """Two sessions have written one checkout, and this is the one thing we can still do about it:
+    say so, immediately, to the session that did it — with enough detail to unpick it.
+
+    This is the honest shape of the MCP path. A shell is held through, so the collision cannot
+    happen; an MCP tool is not, so it can, and detection one call late is all that is available. A
+    collision we can prove and name is not a good outcome. It is merely a very great deal better
+    than silent interleaved writes that surface a week later as a mangled rebase.
+    """
+    v = lock.status(repo)
+    lk = v.get("lock") or {}
+    return "\n".join([
+        "COLLISION — you just wrote a checkout that another session holds.",
+        f"  repo    : {v['repo']}",
+        f"  you did : {intent}",
+        f"  holder  : session {lk.get('session')} — {lk.get('intent') or 'unknown'}",
+        "",
+        "MCP tools are never gated (that is what keeps the off switch and the waiter reachable when",
+        "the lock misfires), so this write was not stopped and cannot now be un-done. Both sets of",
+        "changes are in the tree, interleaved.",
+        "",
+        "STOP WRITING THIS REPO. Then, in this order:",
+        "  1. `git status` and `git diff` — read what is actually there before you touch anything.",
+        "  2. Work out which changes are yours and which are the holder's. Do not commit the lot.",
+        "  3. Tell your human. Two agents editing one checkout is not a thing to quietly patch over.",
+    ])
+
+
+def settle_observed(repo: str, session: str, intent: str) -> list[str]:
+    """The after-picture for an MCP tool call: claim the lock if — and only if — the tree moved.
+
+    Unmoved is the overwhelmingly common case (a Gmail search cannot write a working copy) and it
+    costs exactly nothing: no lock is taken, so nobody is blocked by a session that read its mail.
+
+    Moved means an MCP tool wrote the repo — `mcp__ide__executeCode` running a cell that touches
+    the tree, a filesystem server, anything. The session is a writer, as a fact, so it takes the
+    lock and holds it exactly as a shell that wrote would. One call late, which is the price of
+    the ungated channel, and it is carried in the ledger as a debt rather than dressed up as safe.
+    """
+    before = _recall(OBS_DIR, session, repo)
+    if not before:
+        return []
+    _forget(OBS_DIR, session, repo)
+
+    if before == lock.fingerprint(repo):
+        return []                              # it did not touch the repo. It cost nothing.
+
+    verdict = lock.acquire(repo, session, pid=0, lease_seconds=LEASE_SECONDS, intent=intent)
+    if verdict["status"] == "held":
+        return [format_collision(repo, session, intent)]
+
+    remember_head(session, repo, env.git_head(repo))
+    notes = []
+    if verdict.get("handoff"):
+        notes.append(format_handoff(verdict))
+    if verdict["status"] == "acquired":         # we were not holding it before; now we are, and the
+        notes.append(                           # session never passed a gate that could tell it so
+            f"repo-lock: {intent} changed this working copy, so this session now holds the lock on "
+            f"{repo}. MCP tools are watched rather than gated, so the lock is taken after the fact "
+            f"— it is yours until you hand back with a clean tree.")
+    return notes

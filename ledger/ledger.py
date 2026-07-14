@@ -411,6 +411,68 @@ DECISIONS = [
                                   "which is the only place it is the honest answer"}),
          ]),
 
+    Node(id="mcp-is-watched-never-gated", kind="decision",
+         name="The MCP channel is watched and never gated — the escape hatches all live on it",
+         payload={"rationale":
+                  "xag/repolock#3: an MCP tool that writes the working copy takes no lease. The "
+                  "issue's own proposed fix — add `mcp__.*` to the matcher, or fail closed on "
+                  "unrecognised tools — turns out to be the one thing that must never be done, and "
+                  "the code was ALREADY one line of config away from doing it: the hook's "
+                  "fallthrough treats any tool that is not a declared write as a shell, so the "
+                  "moment `mcp__.*` reached the matcher, MCP calls would have been sent through "
+                  "`hold_unknown` and REFUSED against a live holder. Verified, not assumed: with "
+                  "the matcher widened and nothing else changed, `lock_disable` against a held repo "
+                  "exits 2.\n\n"
+                  "Which is a trap with the safety catch filed off. Three of this library's "
+                  "guarantees are MCP calls, and every one of them is needed precisely when the "
+                  "lock is misbehaving: `lock_wait`, the only way a refused session can wait (the "
+                  "shell is what it was refused); `lock_disable`, the off switch, which "
+                  "the-off-switch-cannot-need-a-shell says in as many words must not be a terminal "
+                  "command; and 'file an issue and move on', the third route the refusal itself "
+                  "offers — and the route by which #4 was reported, from sessions that could run no "
+                  "shell at all. A gate on MCP stands in front of all three. The tool that turns "
+                  "the lock off cannot be reachable only when the lock is off.\n\n"
+                  "So MCP is WATCHED instead: fingerprint before, fingerprint after, and no verdict "
+                  "in between. Unmoved (a mail search; almost every call) costs nothing and takes "
+                  "no lock. Moved means that tool wrote, as a fact, and the session holds the lock "
+                  "from then on exactly as a shell that wrote does. Moved against a live holder is a "
+                  "COLLISION, and the one thing still available is to say so loudly to the session "
+                  "that caused it.\n\n"
+                  "Our own lock tools are exempt from even the watching. `lock_wait` sits there ON "
+                  "PURPOSE while the holder works, so the tree moves under it by design — observing "
+                  "across it would take the holder's honest work, attribute it to the session that "
+                  "was politely waiting, and hand that session a collision report about a file it "
+                  "never touched.\n\n"
+                  "The cost is real and is NOT hidden here: on this path there is no mutex, only "
+                  "detection one call late. See mcp-writes-settle-late, which is a debt in front of "
+                  "the gate — not a hypothesis, because nothing about it is uncertain."},
+         children=[
+             Node(id="alt-gate-mcp-like-a-shell", kind="alternative",
+                  name="Add mcp__.* to the matcher and hold the lock through it, exactly as a shell",
+                  payload={"why": "a true mutex on the MCP path, and it strands the protocol. The "
+                                  "off switch, the blocking wait and 'file an issue and move on' "
+                                  "are all MCP calls, so a blocked session would be refused every "
+                                  "way out of a lock that is misfiring — and a lock whose off "
+                                  "switch is behind its own gate is not a safer lock, it is an "
+                                  "unrecoverable one. It would also refuse a session's mail while "
+                                  "it waits for a repo, which is a blast radius no part of this "
+                                  "protocol asked for"}),
+             Node(id="alt-matcher-lists-writing-mcp-tools", kind="alternative",
+                  name="Enumerate the MCP tools that can write, and gate only those",
+                  payload={"why": "observe-do-not-predict, wearing a new hat. MCP tool names are "
+                                  "open-ended and vendor-supplied: the list is `mcp__ide__"
+                                  "executeCode` today and something nobody has written yet "
+                                  "tomorrow. This is `alt-widen-the-lists` for a namespace that "
+                                  "grows faster than the shell's did"}),
+             Node(id="alt-document-the-boundary-only", kind="alternative",
+                  name="State the boundary in SPEC.md and ship no code",
+                  payload={"why": "honest, and it was the issue's own minimum. Rejected because the "
+                                  "write stays INVISIBLE: a cell that writes the tree from a "
+                                  "notebook kernel leaves the next session to discover it as a "
+                                  "mangled rebase. Watching costs one fingerprint and turns a silent "
+                                  "corruption into a named collision, which is the whole difference"}),
+         ]),
+
     Node(id="the-off-switch-cannot-need-a-shell", kind="decision",
          name="The off switch is an MCP tool and a file — never a command in a terminal",
          payload={"rationale":
@@ -639,6 +701,57 @@ DEBTS = [
                                   "library now lives by."}),
         ],
     ),
+
+    Node(
+        id="mcp-writes-settle-late",
+        kind="debt",
+        name="On the MCP path there is no mutex — a write is detected one call after it lands",
+        payload={
+            "note":
+                "A shell is HELD through (hold-the-lock-through-the-unknown), so two sessions "
+                "cannot write one checkout through it: the second is refused before it runs. An "
+                "MCP tool is not held through, because it MUST NOT be "
+                "(mcp-is-watched-never-gated) — the off switch, the blocking wait and the blocked "
+                "session's 'file an issue and move on' are all MCP calls, and a gate would stand in "
+                "front of all three. So the window that §7b refuses to accept for a shell is "
+                "accepted here, knowingly: between the fingerprint before an MCP call and the one "
+                "after it, a second session can write the same repo, and all the adapter can do is "
+                "prove it happened and shout.\n\n"
+                "This is a DEBT and not a hypothesis, and the distinction is the one this ledger "
+                "was rebuilt to keep honest. Nothing about it is uncertain. The hole is reachable "
+                "by construction, it is reachable today, and I know exactly what would close it — "
+                "so filing it as a belief awaiting evidence, with a falsifier that fires the first "
+                "time somebody loses work, would be hiding it behind the shape of an experiment. "
+                "That is the mistake hold-the-lock-through-the-unknown was written to reverse, and "
+                "it does not get to come back through a different door.\n\n"
+                "It is narrower than it sounds, which is why it is carried rather than paid for at "
+                "the cost of the escape hatches: an MCP tool has to be able to write the filesystem "
+                "at all to reach it. Of the servers on this machine exactly one can — "
+                "`mcp__ide__executeCode`, which runs code in a kernel — and the rest are remote "
+                "calls that cannot touch a working copy.",
+        },
+        params={
+            "prevents_the_collision": Quantity(
+                value=0, unit="mcp-call", provenance="known-reachable, by construction", grounded=False,
+                source="repolock/hooks/common.py::settle_observed — the write is a FACT by the time "
+                       "this runs; the lock is claimed after it landed, and a live holder gets "
+                       "format_collision() instead of a mutex that held"),
+        },
+        children=[
+            Node(id="gate-mcp-on-a-declared-target", kind="discharge",
+                 name="Gate an MCP tool the moment its harness declares what it will write — a path "
+                      "in the tool input, the way Edit carries one — and it joins obligation 1",
+                 payload={"competence": "whoever owns the harness's MCP tool schema; nothing in this "
+                                        "library can grant itself the fact it is missing",
+                          "note": "The debt exists because the call arrives with no declared target, "
+                                  "so there is nothing to lock ON before it runs. Given one, the "
+                                  "tool stops being unknown, is gated before it runs like any Edit, "
+                                  "and the window closes with no guessing anywhere — WITHOUT gating "
+                                  "the calls that carry no target, which is what keeps the off "
+                                  "switch reachable. Discharged by that fact arriving, never by "
+                                  "deciding the risk feels small."}),
+        ],
+    ),
 ]
 
 # --- the gate ------------------------------------------------------------------------
@@ -652,12 +765,15 @@ GATE = Node(
             "repolock sits on the write path of every agent session on the machine. That is an "
             "unforgiving place for an unsound thing, so this gate exists to stop one travelling "
             "there quietly.\n\n"
-            "It is RED, and it names why: the Cursor adapter settles its speculative lock late, "
-            "because nobody has ever watched Cursor emit an event. Discharge it by doing the work "
-            "the discharge names — running the real client and reading the tape. Never by editing "
-            "this file.",
+            "It is RED, and it names both reasons. The Cursor adapter settles its speculative lock "
+            "late, because nobody has ever watched Cursor emit an event. And on the MCP path there "
+            "is no mutex at all — only detection, one call late — because every escape hatch this "
+            "protocol has is an MCP call, and a gate there would stand in front of the off switch. "
+            "Discharge them by doing the work the discharges name: running the real client and "
+            "reading the tape; and gating on a declared write target once a harness gives us one. "
+            "Never by editing this file.",
     },
-    links={"admits": ["cursor-settles-late"]},
+    links={"admits": ["cursor-settles-late", "mcp-writes-settle-late"]},
 )
 
 

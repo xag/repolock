@@ -35,8 +35,15 @@ One developer, several AI agent sessions, one checkout.
 > to be impossible: `sleep` is a shell command, and the shell is exactly what was refused
 > ([#4](https://github.com/xag/repolock/issues/4)).
 >
-> Still open: writes through MCP tools are not seen at all
-> ([#3](https://github.com/xag/repolock/issues/3)).
+> **MCP tools are watched, and never gated** ([#3](https://github.com/xag/repolock/issues/3)). A
+> write through one — a notebook cell, a filesystem server — used to be invisible. It is now seen:
+> the same fingerprint, before and after, and the session that moved the tree takes the lock. But it
+> is never *refused*, and that is deliberate and permanent. Every escape hatch this thing has is an
+> MCP call — the off switch below, `lock_wait`, and the refusal's own "file an issue and move on" —
+> so a gate there would stand in front of every way out of a lock that is misbehaving. The tool that
+> turns the lock off cannot be reachable only when the lock is off. The price is stated rather than
+> hidden: on that one path there is no mutex, only detection one call late, and a write into a repo
+> someone else holds is reported as a collision rather than prevented. See SPEC §7c.
 >
 > **The off switch, when it gets in your way.** When this thing misfires it takes away your *shell*
 > — that is what a refusal is — so the off switch is deliberately not a shell command:
@@ -101,10 +108,15 @@ program.** Four events are wired, and each one is load-bearing:
 
 | event | matcher | why |
 |---|---|---|
-| `PreToolUse`   | `Edit\|Write\|MultiEdit\|NotebookEdit\|Bash\|PowerShell` | acquire before a declared write; hold on speculation before a shell |
-| `PostToolUse`  | `Bash\|PowerShell` | where a shell write is *discovered* — the first moment anyone honestly can |
+| `PreToolUse`   | `Edit\|Write\|MultiEdit\|NotebookEdit\|Bash\|PowerShell\|mcp__.*` | acquire before a declared write; hold on speculation before a shell; *watch* an MCP call |
+| `PostToolUse`  | `Bash\|PowerShell\|mcp__.*` | where a shell or MCP write is *discovered* — the first moment anyone honestly can |
 | `Stop`         | — | the handback: commit/ignore/stash, then the lock frees itself |
 | `SessionStart` | — | the read-side drift check |
+
+`mcp__.*` is in both matchers, and it is **not** there to gate anything. Those calls are fingerprinted
+and never refused (SPEC §7c) — which is a distinction the code has to make deliberately, because the
+hook's own fallthrough treats an unrecognised tool as a shell. Widen the matcher without the rest of
+the change and `lock_disable` gets *blocked by the lock it exists to switch off*.
 
 `PostToolUse` is not optional. Without it, `PreToolUse` still guards the file-editing tools — which
 declare what they will write — but every shell runs unobserved, *and* the speculative lock a shell
