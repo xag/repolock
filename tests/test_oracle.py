@@ -86,3 +86,72 @@ def test_the_oracle_condemns_a_released_dirty_tree(recorded):
 
     assert report.outcome == "violated"
     assert "dirty working tree is never handed" in " ".join(str(v) for v in report.violations)
+
+
+# --- SPEC-v2: the scope oracle -------------------------------------------------------------------
+
+@pytest.fixture
+def recorded_scopes(repo, tmp_path, monkeypatch):
+    """A scope lifecycle: a grant, a disjoint grant, and a grant that must be refused."""
+    from repolock import scope
+
+    monkeypatch.setenv("REPOLOCK_FLIGHT", "1")
+    flightdir = tmp_path / "flight-scopes"
+    monkeypatch.setenv("REPOLOCK_FLIGHT_DIR", str(flightdir))
+    lock_flight.install()
+    try:
+        scope.declare(repo, "A", ["api/**"], "the rate limiter")   # 0 granted
+        scope.declare(repo, "B", ["web/**"], "the page")           # 1 granted — disjoint
+        scope.declare(repo, "C", ["api/handlers/**"], "nope")      # 2 CONFLICT — inside A's region
+    finally:
+        fr.uninstall()
+    name = sorted(os.listdir(flightdir))[0]
+    return fr.Recording.load(flightdir / name)
+
+
+def test_every_scope_claim_holds_on_every_recorded_call(recorded_scopes):
+    for i, call in enumerate(recorded_scopes.calls):
+        report = check(recorded_scopes.call(i))
+        assert report.ok, f"call {i} ({call['fn']}):\n{fr.format_invariant_report(report)}"
+
+
+def test_the_oracle_condemns_a_scope_granted_over_a_live_claim(recorded_scopes):
+    """NEGATIVE CONTROL, and the most important one in v2.
+
+    Plant the bug that no crash and no test of the code's own output can catch: an overlap test that
+    says two regions never touch. Nothing raises. Nothing is refused. Two agents are simply told they
+    each own the region — and both go to work in it, each of them certain they are alone. That is
+    strictly worse than either being blocked, and it surfaces days later as a diff nobody can explain.
+
+    Built like the stolen-lease control above: keep the RECORDED outcome (a grant), and lie to the
+    call about the world instead — the boundary now says another agent already holds the very region
+    being handed out. The code, with `overlaps` broken, grants it anyway.
+
+    The oracle must condemn that WITHOUT consulting `scope.overlaps`, because `scope.overlaps` is the
+    thing that is broken. It recomputes the overlap itself (`invariants._touches`) from the claim
+    records the boundary served. If this test ever goes green, the oracle has stopped being an oracle
+    and become an echo.
+    """
+    import json as _json
+
+    from repolock import scope
+
+    handle = recorded_scopes.call(1)                     # B declares web/** — recorded as GRANTED
+
+    rival = _json.dumps({"repo": "r", "session": "A", "scope": ["web/**"],   # ...but A holds it
+                         "intent": "the page, actually", "acquired_at": 0,
+                         "renewed_at": 0, "expires_at": 9e18, "lease_seconds": 900})
+    handle.effect("read_claims").result = [rival]
+
+    real = scope.overlaps
+    scope.overlaps = lambda a, b: False                  # the silent bug
+    try:
+        report = check(handle)                           # ...so it still grants: outcome unchanged
+    finally:
+        scope.overlaps = real
+
+    assert report.outcome == "violated", (
+        "the oracle did not notice that two agents were handed the same region:\n"
+        + fr.format_invariant_report(report))
+    violated = " ".join(str(v) for v in report.violations)
+    assert "two live claims never overlap" in violated

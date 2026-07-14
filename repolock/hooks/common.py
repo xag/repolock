@@ -39,13 +39,15 @@ Two things follow, and they are the whole design:
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import subprocess
 import sys
 
-from repolock import env, lock
+from repolock import env, lock, scope
 
 LEASE_SECONDS = 600          # renewed on every tool call; must outlast the longest single call
+SNAP_DIR = "snap"            # ...and the itemised before-picture a scoped session is witnessed on
 SEEN_DIR = "seen"            # per-(session, repo) memory of the last HEAD seen — the drift check
 FP_DIR = "fp"                # ...and of the fingerprint taken before the tool now running
 OBS_DIR = "obs"              # ...and the one taken around an MCP call, which is watched, never gated
@@ -649,3 +651,178 @@ def settle_observed(repo: str, session: str, intent: str) -> list[str]:
             f"{repo}. MCP tools are watched rather than gated, so the lock is taken after the fact "
             f"— it is yours until you hand back with a clean tree.")
     return notes
+
+
+# =================================================================================================
+# SPEC-v2: negotiated scopes. Everything below is the TRIAL (§11), and it is reached only by a
+# session that has DECLARED a scope. A session that has not declared holds `**`, takes the v1 path
+# above, and cannot tell the difference — which is the property that makes the trial safe to run.
+# =================================================================================================
+
+def format_scope_conflict(verdict: dict, what: str = "") -> str:
+    """A conflict is an ANSWER, not a refusal (SPEC-v2 §2).
+
+    v1 tells a blocked agent who holds the checkout and hands it a way to wait. It is still, in the
+    end, a closed door. Here the agent is told exactly which region is taken, by whom, for what — and
+    **where it may go instead**. It does not wait; it takes a scope that fits and carries on.
+    """
+    out = ["SCOPE CONFLICT — another agent has reserved part of what you asked for."]
+    if what:
+        out.append(f"  you asked : {what}")
+    for c in verdict.get("conflicts") or []:
+        out.append(f"  taken     : {', '.join(c['scope'])}")
+        out.append(f"    by      : agent {c['session']} — {c['intent'] or 'no stated intent'} "
+                   f"({c['held_for']}s)")
+    if free := verdict.get("free_hint"):
+        out += ["", f"  FREE RIGHT NOW: {', '.join(free)}"]
+    out += [
+        "",
+        "You are not blocked — you are being told where the work is. Pick one:",
+        "  * declare_scope(repo, [<something narrower that does not overlap>]) and get on with it;",
+        "  * split the work: file an issue for the part inside their region, and do the rest now;",
+        "  * ask them to give it up: please_narrow is not built yet — say so to your human.",
+        "Do NOT write into their region anyway. It is observed, and it will be reported to them.",
+    ]
+    return "\n".join(out)
+
+
+def scope_gate(repo: str, session: str, path: str, intent: str) -> tuple[str | None, list[str]]:
+    """A DECLARED write by a scoped agent (SPEC-v2 §6). The one place v2 still prevents rather than
+    witnesses — because `Edit`/`Write` carry the path, so no guessing is needed and none is done.
+
+    Inside your scope: allowed, and the lease renews. Outside it: refused BEFORE it lands, and the
+    refusal is useful in a way v1's never was — the agent is not told to wait, it is told to declare
+    the region it evidently meant to write.
+    """
+    my = scope.scope_of(repo, session)
+    if scope.covers(my, path):
+        scope.renew(repo, session)
+        return None, []
+
+    rel = _rel(repo, path)
+    verdict = scope.declare(repo, session, list(my) + [rel], intent)   # can we just take it?
+    if verdict["status"] == "granted":
+        return None, [f"repo-scope: extended your scope to cover {rel} (nobody else had claimed it)."]
+    if verdict["status"] == "conflict":
+        return format_scope_conflict(verdict, what=f"{intent} -> {rel}"), []
+    return None, [f"repo-scope: {rel} is outside your scope and could not be added "
+                  f"({verdict.get('reason')}). Declare it explicitly."]
+
+
+def observe_scoped(repo: str, session: str) -> None:
+    """The before-picture for a scoped session's shell or MCP call. No lock is taken and nothing is
+    refused: their targets are not declared, so §7a's proof applies and they are WITNESSED (§7)."""
+    _remember(SNAP_DIR, session, repo, json.dumps(lock.snapshot(repo)))
+
+
+def format_violation(repo: str, session: str, bad: list[dict], head_moved: bool) -> str:
+    """The loudest thing v2 says, and the honest cost of not gating (SPEC-v2 §7a, §7b).
+
+    We could not stop this write — a shell's target is not knowable before it runs — so the least we
+    owe both parties is the truth, immediately, with the remedy attached.
+    """
+    out = ["SCOPE VIOLATION — you just wrote inside another agent's reserved region.",
+           f"  repo: {repo}", ""]
+    for v in bad:
+        out.append(f"  {v['path']}")
+        out.append(f"     belongs to agent {v['victim']} ({', '.join(v['scope'])})"
+                   + (f" — {v['intent']}" if v["intent"] else ""))
+    out += [
+        "",
+        "You are not in trouble; you are being told before it becomes a mangled rebase. STOP, then:",
+        "  1. `git status` / `git diff` — look at what is actually there.",
+        "  2. Put back what was theirs. Do not commit it, do not 'fix' it.",
+    ]
+    if head_moved:
+        out += [
+            "  3. YOU COMMITTED THEIR WORK. This is the one violation that is cleanly recoverable,",
+            "     so recover it now, before anything else lands on top:",
+            "         git reset --soft HEAD~1     # un-commit, keep the tree",
+            "         git restore --staged <their paths>",
+            "     A `git add -A` sweeps up every dirty file in the checkout, including the ones",
+            "     another agent is halfway through. Stage YOUR paths by name, never `-A`.",
+        ]
+    else:
+        out.append("  3. Then declare the scope you actually needed, and carry on inside it.")
+    return "\n".join(out)
+
+
+def witness_scoped(repo: str, session: str) -> list[str]:
+    """The after-picture: name the paths that moved, and say whose region they landed in (§7).
+
+    This is what a scoped session gets instead of a gate. It cannot prevent the write — §7a is
+    explicit that this is a real loss, and that losing it is the trade the trial is here to test —
+    but it can refuse to let it be silent.
+    """
+    memo = _recall(SNAP_DIR, session, repo)
+    if not memo:
+        return []
+    _forget(SNAP_DIR, session, repo)
+    try:
+        before = json.loads(memo)
+    except (json.JSONDecodeError, ValueError):
+        return []
+
+    after = lock.snapshot(repo)
+    written = lock.written_between(repo, before, after)
+    if not written:
+        return []                                   # it read. It cost nobody anything.
+
+    scope.renew(repo, session)
+    notes = []
+    if bad := scope.violations(repo, session, written):
+        notes.append(format_violation(repo, session, bad,
+                                      head_moved=before.get("HEAD") != after.get("HEAD")))
+    if loose := scope.stray(repo, session, written):
+        notes.append(
+            "repo-scope: you wrote outside your declared scope, into a region nobody has claimed:\n"
+            + "\n".join(f"  {p}" for p in loose[:8])
+            + "\nNobody was hurt — but the next agent cannot see that this is yours. Declare it: "
+              "extend_scope(repo, [...]).")
+    remember_head(session, repo, env.git_head(repo))
+    return notes
+
+
+def scope_blocks_an_undeclared_session(repo: str, session: str) -> str | None:
+    """An agent that has not declared holds `**` (SPEC-v2 §4), and `**` overlaps every scope. So it
+    cannot walk into a checkout somebody is holding a region of.
+
+    And THIS is the migration path, which is why the message matters more than the refusal: the way
+    out is not to wait, it is to declare. The refusal teaches the protocol to the agent that has
+    never heard of it, at the only moment it has a reason to care.
+    """
+    claims = [c for c in scope.live(repo) if c["session"] != session]
+    if not claims or scope.declared(repo, session):
+        return None
+
+    out = ["THIS CHECKOUT IS SHARED — another agent has reserved part of it, and you have "
+           "reserved nothing.",
+           f"  repo: {repo}", ""]
+    for c in claims:
+        out.append(f"  agent {c['session']} holds {', '.join(c['scope'])}"
+                   + (f" — {c.get('intent')}" if c.get("intent") else ""))
+    out += [
+        "",
+        "An agent that declares nothing is treated as claiming EVERYTHING, so you overlap them and",
+        "you are held out. That default is deliberate: silence has to be safe.",
+        "",
+        "SAY WHAT YOU ARE GOING TO TOUCH, and you can work right now, alongside them:",
+        "    declare_scope(repo, ['src/thing/**', 'tests/thing/**'], intent='what you are doing')",
+        "",
+        "Then write inside it freely. If you find you need more, extend_scope() — it never blocks,",
+        "it just tells you if someone is there. Reserve `git:index` before you commit.",
+    ]
+    return "\n".join(out)
+
+
+def _rel(repo: str, path: str) -> str:
+    p = os.path.abspath(path).replace("\\", "/")
+    r = env.canonical(repo).replace("\\", "/")
+    return p[len(r):].lstrip("/") if p.lower().startswith(r.lower()) else p
+
+
+def scope_hand_back(repo: str, session: str) -> None:
+    """A scoped session going home releases its region against a clean tree — same rule as v1 §5,
+    same reason: a region parked on half-finished work blocks everyone and protects nobody."""
+    if scope.declared(repo, session) and not env.git_dirty(repo):
+        scope.release(repo, session)

@@ -396,6 +396,39 @@ def fingerprint(repo: str) -> str:
     return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
 
 
+def snapshot(repo: str) -> dict:
+    """The fingerprint, ITEMISED — path -> (status, stat), plus HEAD.
+
+    `fingerprint()` hashes all of this into one string, which answers *did the repo move?* and
+    nothing else. That was enough for v1, where the only question was whether the session had turned
+    out to be a writer. It is not enough for SPEC-v2's witness (§7), which has to name the paths, and
+    then say whose region they landed in. Same observations, same boundary, same tape — kept apart so
+    that v1's hot path does not pay for v2's question.
+    """
+    repo = env.canonical(repo)
+    out = {"HEAD": env.git_head(repo) or "-"}
+    for line in env.git_dirty(repo):
+        path = line[3:].strip().strip('"').split(" -> ")[-1]
+        out[path] = f"{line[:2]}|{env.file_stat(os.path.join(repo, path))}"
+    return out
+
+
+def written_between(repo: str, before: dict, after: dict) -> list[str]:
+    """The paths that a tool call actually wrote. A fact, not a guess about a command.
+
+    A commit is chased into the object graph rather than inferred: a file created AND committed
+    inside one tool call is never dirty at either end, so it appears in NEITHER porcelain — and it is
+    precisely the case that matters, because `git add -A` sweeping another agent's half-finished work
+    into your commit is the founding incident of this library (SPEC-v2 §1a).
+    """
+    paths = {p for p in set(before) | set(after)
+             if p != "HEAD" and before.get(p) != after.get(p)}
+    b, a = before.get("HEAD"), after.get("HEAD")
+    if b and a and b != a and b != "-" and a != "-":
+        paths |= set(env.git_paths_between(env.canonical(repo), b, a))
+    return sorted(paths)
+
+
 def drift(repo: str, seen_head: str | None) -> dict:
     """The read-side check, and the cheapest thing in this file.
 

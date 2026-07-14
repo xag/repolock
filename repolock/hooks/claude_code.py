@@ -49,11 +49,11 @@ import os
 import sys
 
 try:
-    from repolock import env, lock
+    from repolock import env, lock, scope
     from repolock.hooks import common
 except ImportError:                               # run straight from a checkout, uninstalled
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-    from repolock import env, lock
+    from repolock import env, lock, scope
     from repolock.hooks import common
 
 # The tools that tell us what they will write. The ONLY place a write is known in advance — and the
@@ -129,6 +129,13 @@ def _intent(payload: dict) -> str:
     return tool
 
 
+def _target_path(payload: dict) -> str:
+    """The file a declared write names. Ground truth, and the only reason SPEC-v2 §6 can still
+    PREVENT rather than merely witness."""
+    ti = payload.get("tool_input") or {}
+    return ti.get("file_path") or ti.get("notebook_path") or ""
+
+
 def _target(payload: dict) -> tuple[str | None, bool]:
     """(repo, known_write). The repo a tool is about to act on, and whether we KNOW it writes.
 
@@ -157,6 +164,30 @@ def pre_tool_use(payload: dict) -> None:
     _record()
     session = payload.get("session_id") or "unknown"
     intent = _intent(payload)
+
+    # --- SPEC-v2: has this agent declared a scope? -----------------------------------------------
+    # If it has, it works under the reservation it negotiated and never touches the v1 whole-repo
+    # lock. If it has not, it holds `**` and everything below is v1, unchanged — which is the
+    # property that makes the trial safe: silence is exactly as safe as it was yesterday.
+    if scope.declared(repo, session):
+        if tool.startswith("mcp__"):
+            if _watched_mcp(tool):
+                common.observe_scoped(repo, session)     # witnessed, never gated (§7c stands)
+            return
+        if known_write:
+            denial, notes = common.scope_gate(repo, session, _target_path(payload), intent)
+            if denial:
+                _deny(denial)
+            for note in notes:
+                _say(note)
+            return
+        common.observe_scoped(repo, session)             # a shell: witnessed too (§7, §7a)
+        return
+
+    # An undeclared agent is `**`, so it overlaps anyone holding a region. The refusal TEACHES the
+    # protocol — the way out is not to wait, it is to say what you are going to touch.
+    if denial := common.scope_blocks_an_undeclared_session(repo, session):
+        _deny(denial)
 
     # MCP: take the before-picture and get out of the way. No lock, no refusal, ever. This channel
     # has to stay open or the off switch, the waiter and the blocked session's "file an issue and
@@ -204,11 +235,22 @@ def post_tool_use(payload: dict) -> None:
         return                       # our own lock tools — nothing was observed, nothing to settle
 
     repo, known_write = _target(payload)
-    if not repo or known_write:
-        return                       # a declared write took the lock before it ran, and keeps it
+    if not repo:
+        return
 
     _record()
     session = payload.get("session_id") or "unknown"
+
+    # SPEC-v2: the witness. A scoped agent's shell and MCP calls were not gated, so this is where we
+    # find out what they did — and, if it landed in someone else's region, say so to both of them.
+    if scope.declared(repo, session):
+        if not known_write:
+            for note in common.witness_scoped(repo, session):
+                _say(note)
+        return
+
+    if known_write:
+        return                       # a declared write took the lock before it ran, and keeps it
 
     # The MCP half of the same question, asked without a lock having been staked on the answer:
     # did the tree move? If it did, that tool wrote, and the session becomes the holder here rather
@@ -238,6 +280,11 @@ def stop(payload: dict) -> None:
         return
     _record()
     session = payload.get("session_id") or "unknown"
+
+    # SPEC-v2: a scoped agent gives its region back against a clean tree, for v1 §5's reason exactly
+    # — a region parked on half-finished work blocks everyone and protects nobody.
+    common.scope_hand_back(repo, session)
+
     block, notes = common.hand_back(
         repo, session, already_asked=bool(payload.get("stop_hook_active")))
     if block:

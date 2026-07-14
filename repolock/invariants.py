@@ -24,6 +24,8 @@ Write each claim as the property, not the check; guard result-readers with `t.ra
 
 from __future__ import annotations
 
+import json
+
 import flight_recorder as fr
 
 from repolock.lock import Lock
@@ -118,6 +120,80 @@ def exclusion_holds(t: fr.Trajectory) -> None:
     assert prior.session == mine, (
         f"granted the lock over a LIVE lease held by {prior.session!r} "
         f"(expires {prior.expires_at}, holder alive) while asking as {mine!r}")
+
+
+def _touches(a: str, b: str) -> bool:
+    """Do two resources overlap? **Deliberately a SECOND implementation, and not scope.overlaps.**
+
+    The rule at the top of this file says an invariant judges from the boundary and never from the
+    code under test — and nowhere does that bite harder than here. `scope.overlaps` IS the thing most
+    likely to be wrong, and it fails *silently*: a broken overlap test does not raise, it hands the
+    same region to two agents and tells each of them they are alone. An oracle that asked
+    `scope.conflicts` whether `scope` had just conflicted would be fooled by the identical bug and
+    would report green — which is not an oracle, it is an echo.
+
+    So the judge computes it again, from the claim records the boundary actually read. Twenty lines
+    of duplication, and they are the twenty that would catch it.
+    """
+    a, b = a.strip().replace("\\", "/"), b.strip().replace("\\", "/")
+    if "**" in (a, b) or a == b:
+        return True
+
+    def named(r):
+        return ":" in r.split("/")[0]
+
+    def pre(r):
+        return r[:-3].rstrip("/") + "/" if r.endswith("/**") else (r if r.endswith("/") else None)
+
+    if named(a) or named(b):
+        return False                            # named resources: equal-or-disjoint, nothing else
+    pa, pb = pre(a), pre(b)
+    if pa and pb:
+        return pa.startswith(pb) or pb.startswith(pa)
+    if pa:
+        return b.startswith(pa)
+    if pb:
+        return a.startswith(pb)
+    return False
+
+
+@fr.invariant("two live claims never overlap — a granted scope was free at the moment it was granted")
+def scopes_never_overlap(t: fr.Trajectory) -> None:
+    """SPEC-v2's exclusion claim, and the one that matters most — because it is the one that fails
+    SILENTLY. A lock that wrongly refuses is annoying and obvious. A scope that is wrongly granted is
+    two agents editing one region, each of them certain they are alone, and nobody finds out until
+    the diff.
+
+    Judged from the boundary: the claim files that were actually on disk at the moment of the grant,
+    and an overlap test of its own (`_touches`) that does not share a line with the code it judges.
+    """
+    if t.fn != "declare" or t.raised:
+        return
+    if (t.result or {}).get("status") != "granted":
+        return
+
+    granted = ((t.result or {}).get("claim") or {}).get("scope") or []
+    mine = (t.kwargs or {}).get("session")
+    now = _clock(t)
+
+    # `records` is bound by env.read_claims — the claim files that were ACTUALLY on disk when this
+    # grant was decided. Read the local, not the return value of a fresh call: on replay the boundary
+    # is served from the feed, so re-asking would be asking the code under test.
+    seen = t.trace.values("records")
+    for text in (seen[0].value if seen else []) or []:
+        try:
+            other = json.loads(text)
+        except (json.JSONDecodeError, ValueError):
+            continue                            # a torn claim is no claim (SPEC §2)
+        if other.get("session") == mine or not other.get("scope"):
+            continue
+        if now is not None and other.get("expires_at", 0) <= now:
+            continue                            # lapsed: it binds nobody
+
+        clash = [(m, o) for m in granted for o in other["scope"] if _touches(m, o)]
+        assert not clash, (
+            f"granted {granted} to {mine!r} while {other['session']!r} held {other['scope']} "
+            f"— overlapping at {clash}. Two agents have just been told they own the same region.")
 
 
 @fr.invariant("a live lease is never stolen — a takeover requires a dead or lapsed holder")

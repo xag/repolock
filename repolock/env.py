@@ -171,6 +171,65 @@ def remove_record(repo: str) -> bool:
         return False
 
 
+# --- the claim store (SPEC-v2 §2) ---------------------------------------------------------------
+#
+# One file per (repo, agent), never one file per repo holding a list. That is not tidiness, it is
+# the only way this is safe without a mutex of its own: a shared list would be read-modify-write, so
+# two agents declaring at the same instant would clobber each other — and a lock store that loses a
+# claim under contention is a lock store that fails exactly when it is needed. Each agent writes only
+# its OWN file, and reading the directory is what enumerates the claims.
+
+def claims_dir(repo: str) -> str:
+    """Beside the lockfiles, and outside every repo, for the reasons lock_dir() gives."""
+    key = hashlib.sha256(repo.encode("utf-8")).hexdigest()[:16]
+    d = os.path.join(os.path.dirname(lock_dir()), "claims", key)
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def claim_path(repo: str, session: str) -> str:
+    return os.path.join(claims_dir(repo), f"{hashlib.sha256(session.encode()).hexdigest()[:16]}.json")
+
+
+def read_claims(repo: str) -> list[str]:
+    """The raw text of every claim on this repo. Unparsable ones are the caller's problem — the
+    SPEC says a torn record reads as no claim, and that judgement is policy, so it is not made here."""
+    out = []
+    try:
+        names = sorted(os.listdir(claims_dir(repo)))
+    except OSError:
+        return out
+    for name in names:
+        if not name.endswith(".json"):
+            continue
+        try:
+            with open(os.path.join(claims_dir(repo), name), encoding="utf-8") as f:
+                out.append(f.read())
+        except OSError:
+            continue
+    return out
+
+
+def write_claim(repo: str, session: str, text: str) -> str:
+    """Atomic, for the same reason write_record is: a torn claim is a region nobody owns."""
+    path = claim_path(repo, session)
+    tmp = f"{path}.{os.getpid()}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+    return path
+
+
+def remove_claim(repo: str, session: str) -> bool:
+    try:
+        os.remove(claim_path(repo, session))
+        return True
+    except OSError:
+        return False
+
+
 def _run(args: list[str], cwd: str | None) -> str | None:
     try:
         res = subprocess.run(args, cwd=cwd, capture_output=True, text=True, timeout=30)
@@ -217,6 +276,26 @@ def git_log_between(repo: str, base: str, head: str) -> list[str]:
         return []
     out = _run(["git", "log", "--oneline", "--no-decorate", f"{base}..{head}"], cwd=repo)
     return [ln for ln in (out or "").splitlines() if ln.strip()]
+
+
+def git_paths_between(repo: str, base: str, head: str) -> list[str]:
+    """The paths touched by the commits in base..head.
+
+    The witness cannot see a file that was created and committed inside a single tool call — it is
+    never dirty, so it is in no porcelain. This is how those are recovered, and they are the ones
+    that matter: a `git add -A` that swept up another agent's work shows up here and nowhere else.
+    """
+    if not base or not head or base == head:
+        return []
+    out = _run(["git", "log", "--name-only", "--pretty=format:", f"{base}..{head}"], cwd=repo)
+    return sorted({ln.strip().replace("\\", "/") for ln in (out or "").splitlines() if ln.strip()})
+
+
+def git_tracked_dirs(repo: str) -> list[str]:
+    """Top-level directories git tracks. Only used to tell a refused agent WHERE IT MAY GO instead —
+    a conflict has to be an answer, not a wall (SPEC-v2 §2)."""
+    out = _run(["git", "ls-tree", "-d", "--name-only", "HEAD"], cwd=repo)
+    return [ln.strip().replace("\\", "/") for ln in (out or "").splitlines() if ln.strip()]
 
 
 def git_commit_exists(repo: str, sha: str) -> bool:
