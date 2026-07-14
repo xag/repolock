@@ -172,7 +172,7 @@ def lock_disable(reason: str, clear_held_locks: bool = True) -> str:
     from transponder import toggle
 
     v = toggle.disable(reason=reason, clear=clear_held_locks)
-    out = ["repo-scope is now OFF — every hook, in every session, running or not, is a no-op.",
+    out = ["transponder is now OFF — every hook, in every session, running or not, is a no-op.",
            f"reason: {reason}"]
     if v["was_holding"]:
         out.append(f"\nthe map was carrying {len(v['was_holding'])} claim(s):")

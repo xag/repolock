@@ -178,7 +178,7 @@ def heads_up(repo: str, session: str, path: str, intent: str) -> list[str]:
     if my:                                      # a participant on unclaimed ground: keep the map true
         v = scope.declare(repo, session, list(my) + [target], intent)
         if v["status"] == "granted":
-            return [f"repo-scope: extended your scope to cover {_rel(repo, path)}."]
+            return [f"transponder: extended your scope to cover {_rel(repo, path)}."]
     return []
 
 
@@ -201,7 +201,7 @@ def watch(repo: str, session: str) -> list[str]:
     notes = []
     if _recall(SNAP_DIR, session, repo) and not _recall(WARNED_DIR, session, repo):
         _remember(WARNED_DIR, session, repo, "1")
-        notes.append("repo-scope: the witness's settle half (PostToolUse) is not wired, so writes "
+        notes.append("transponder: the witness's settle half (PostToolUse) is not wired, so writes "
                      "here are NOT being observed. Fix the hooks (python -m transponder.toggle on) and "
                      "restart this session — it snapshotted its hooks when it started.")
     _remember(SNAP_DIR, session, repo, json.dumps(witness.snapshot(repo)))
@@ -239,7 +239,7 @@ def settle(repo: str, session: str, intent: str) -> list[str]:
                                       head_moved=before.get("HEAD") != after.get("HEAD")))
     if scope.declared(session) and (loose := scope.stray(session, written)):
         notes.append(
-            "repo-scope: you wrote outside your declared scope, into a region nobody has claimed:\n"
+            "transponder: you wrote outside your declared scope, into a region nobody has claimed:\n"
             + "\n".join(f"  {_rel(repo, p)}" for p in loose[:8])
             + "\nNobody was hurt — but the next agent cannot see that this is yours. Declare it: "
               "extend_scope(repo, [...]).")

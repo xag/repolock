@@ -321,7 +321,7 @@ def main() -> None:
         # A crashing hook must never wedge a session. Fail SILENT-to-the-flow, loud-to-the-eye:
         # the courier losing a note is an inconvenience; a hook error blocking work would be the
         # lock's old disease wearing the informer's coat.
-        print(f"repo-scope hook error ({type(e).__name__}: {e}) — this call went unwitnessed",
+        print(f"transponder hook error ({type(e).__name__}: {e}) — this call went unwitnessed",
               file=sys.stderr)
         sys.exit(0)
 

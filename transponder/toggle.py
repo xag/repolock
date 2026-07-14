@@ -114,7 +114,7 @@ def enable() -> dict:
 
 def render(s: dict) -> str:
     on = not s["effective_disabled"]
-    out = [f"repo-lock is {'ON' if on else 'OFF'}",
+    out = [f"transponder is {'ON' if on else 'OFF'}",
            f"  switch  : {'ARMED (off)' if s['armed'] else 'not armed'}   {s['path']}",
            f"  hooks   : {'wired' if s['wired'] else 'NOT WIRED'}   {s['settings']}"]
     if s["reason"]:
