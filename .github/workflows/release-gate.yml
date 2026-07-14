@@ -1,0 +1,55 @@
+# The design ledger's release gate, wired to the only event it ever claimed to gate.
+#
+# `nothing-unsound-passes-a-gate` counts the ungrounded params on everything the gate admits, and
+# exits 1 while any of them is undischarged. Until now nothing ran it: ci.yml runs pytest and
+# nothing else, so the "brake" braked nothing and was, precisely, the written-down caveat the gate
+# exists to abolish.
+#
+# It runs on a TAG, not on every push. That distinction is the whole design. A red gate does not
+# mean the code is broken — the test suite says whether the code is broken — it means an unsound
+# thing is being carried and has not been paid for. That should stop a RELEASE and it should not
+# stop a day's work, so it hangs off the tag and leaves ci.yml alone.
+#
+# IT CANNOT RUN YET, AND IT SAYS SO RATHER THAN PRETENDING. The ledger is authored against `bom`,
+# which is private, and this repository is public — so the gate cannot be given a token to reach it
+# without putting a key to private repos inside a public one. No secret is used here on purpose.
+# The gate therefore fails until bom is public: see xag/repolock#13.
+#
+# Failing is the correct behaviour and not a placeholder. A gate that SKIPS when it cannot look
+# reports a green tick that means "I did not check", which is worse than a red one that means
+# "something is unpaid" — that is the exact failure ledger/check.py refuses to have, so this
+# workflow does not have it either.
+name: release-gate
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:          # so the gate can be read at any time, not only at a release
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+
+      - run: uv sync --all-extras
+
+      # Public URL, no credentials. While bom is private this clone fails, and the gate fails with
+      # it — which is the honest state of the gate, not an outage.
+      - name: Install the substrate the ledger is authored against
+        run: |
+          if ! uv pip install "bom @ git+https://github.com/xag/bom"; then
+            echo "::error::Cannot install bom, so the ledger gate cannot run — see xag/repolock#13."
+            echo "The gate is FAILING, not skipping: a gate that passes when it could not look is"
+            echo "not a gate. This clears when bom is public. Until then, run the gate on a machine"
+            echo "that has the substrate:  uv run python -m ledger.check"
+            exit 1
+          fi
+
+      # bom is installed on top of the synced env, so `uv run` must NOT re-sync afterwards: a sync
+      # is exact, and it would prune bom straight back out again as an extraneous package.
+      - name: Run the gate
+        run: uv run --no-sync python -m ledger.check
