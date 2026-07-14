@@ -162,12 +162,22 @@ def before_shell(p: dict) -> None:
 
 
 def go_idle(p: dict) -> None:
+    """Cursor's stop. Same obligation as Claude Code's, weaker enforcement — and said out loud.
+
+    Claude Code's Stop hook can REFUSE the handback (exit 2) and hand the reason back to the model,
+    which is what lets the dirty-idle lock be prevented rather than paid for by everyone else
+    (common.hand_back). Cursor's stop is not a permission gate and has no documented way to do that,
+    so this does not pretend to: it takes the old path — hold the lock, mark it idle, let the lease
+    lapse — by asking hand_back the question it would ask on the SECOND stop.
+
+    The asymmetry is real and belongs in the open. Papering over it would mean claiming a guarantee
+    on Cursor that only exists on Claude Code.
+    """
     notes = _catch_up(p)                          # a write by the last shell must not be missed
     session = _session(p)
     for repo in _repos(p):
-        verdict = lock.go_idle(repo, session)
-        if verdict["status"] == "idle_dirty":
-            notes.append(verdict["message"])
+        _, more = common.hand_back(repo, session, already_asked=True)
+        notes += more
     _out({"user_message": "\n".join(notes)} if notes else {})
 
 

@@ -68,6 +68,12 @@ def lock_dir() -> str:
     return d
 
 
+def disabled_path() -> str:
+    """The panic file itself. Its PRESENCE is the switch; its contents are a note to whoever finds
+    it — who turned the lock off, when, and why. A zero-byte file is a mystery in a fortnight."""
+    return os.path.join(os.path.dirname(lock_dir()), "DISABLED")
+
+
 def disabled() -> bool:
     """The panic switch: `~/.repolock/DISABLED` (or REPOLOCK_DISABLED=1) and every adapter becomes
     a no-op that blocks nothing.
@@ -83,7 +89,7 @@ def disabled() -> bool:
         return value.strip().lower() in ("1", "true", "on", "yes")   # a session) must be able to
                                           # turn the lock back on without deleting the machine's
                                           # panic file out from under everyone else.
-    return os.path.exists(os.path.join(os.path.dirname(lock_dir()), "DISABLED"))
+    return os.path.exists(disabled_path())
 
 
 def recording() -> bool:

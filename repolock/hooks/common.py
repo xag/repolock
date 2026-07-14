@@ -52,30 +52,67 @@ TICKET_DIR = "tickets"       # ...and the one command a refused session is allow
 WARNED_DIR = "warned"        # ...and whether we already told this session its install is broken
 
 
-def ticket_for(session: str, repo: str) -> str:
-    """The one command the gate will let a BLOCKED session run in the repo it is blocked on.
+def _ticket_key(session: str, repo: str) -> str:
+    return hashlib.sha256(f"ticket:{session}:{env.canonical(repo)}".encode()).hexdigest()[:16]
+
+
+def tickets_for(session: str, repo: str) -> dict[str, str]:
+    """The one command the gate will let a BLOCKED session run — one spelling per shell.
 
     A refused session cannot run any shell here — that is the whole point of the refusal — and the
     background waiter that would let it go and do something else is itself a shell. So the gate
     mints the command, and then allows exactly that string and nothing else.
 
     This is a **capability, not a classification.** Nothing reads the command to judge what it does.
-    The hook compares it, byte for byte, against a string it wrote itself; append a single character
+    The hook compares it, byte for byte, against strings it wrote itself; append a single character
     — `... && rm -rf src` — and it is a different string, matches nothing, and is gated like any
     other shell. That distinction is the entire difference between this and the thing that has now
     broken twice (#4, #7): recognising your own token is not the same act as understanding
     someone else's command.
 
-    Deterministic in (session, repo), so the refusal can print it and the next PreToolUse can
-    recognise it without any state having to survive in between.
+    **Why two spellings, and why forward slashes.** The first version of this minted exactly one
+    string, `f"{sys.executable} -m ..."`, with `sys.executable` unquoted and spelled the way Windows
+    spells it: `C:\\Users\\...\\python.exe`. The gate accepted it, the model ran it verbatim, and
+    bash ate every backslash as an escape — `C:UserstransProjects...python.exe: command not found`,
+    exit 127. The waiter never ran ONCE, on any tape, in the library's whole history (xag/repolock#10).
+    And because the refusal tells the session to launch it with `run_in_background`, dying instantly
+    looked exactly like waking because the lock freed: the escape hatch did not merely fail, it
+    failed by reporting success.
+
+    So the command has to survive the shell it is pasted into, and there is no single string that
+    survives both of the shells a harness may pick:
+
+      sh    "C:/…/python.exe" …     quoted, so a space in the path is safe; forward slashes, so
+                                    there is no backslash for bash to eat. A leading `&` would be
+                                    a syntax error here.
+      pwsh  & "C:/…/python.exe" …   PowerShell will not EXECUTE a quoted path without the call
+                                    operator — it just echoes the string back — so `&` is required,
+                                    and required to be absent above.
+
+    Both are minted here and both are allowed, because both are ours. Forward slashes are safe on
+    Windows: the OS, and Python's own `-m`, accept them everywhere.
+
+    Deterministic in (session, repo), so the refusal can print them and the next PreToolUse can
+    recognise them without any state having to survive in between.
     """
-    key = hashlib.sha256(f"ticket:{session}:{env.canonical(repo)}".encode()).hexdigest()[:16]
-    return (f"{sys.executable} -m repolock.waitfor \"{env.canonical(repo)}\" --ticket {key}")
+    py = sys.executable.replace("\\", "/")
+    target = env.canonical(repo).replace("\\", "/")
+    tail = f'-m repolock.waitfor "{target}" --ticket {_ticket_key(session, repo)}'
+    return {"sh": f'"{py}" {tail}', "pwsh": f'& "{py}" {tail}'}
+
+
+def ticket_for(session: str, repo: str) -> str:
+    """The POSIX spelling — what `Bash` wants, and the default the refusal leads with."""
+    return tickets_for(session, repo)["sh"]
 
 
 def is_ticket(session: str, repo: str, command: str) -> bool:
-    """Is this EXACTLY the command we minted for this session and repo? Byte equality, nothing else."""
-    return bool(command) and command.strip() == ticket_for(session, repo)
+    """Is this EXACTLY one of the commands we minted for this session and repo? Byte equality.
+
+    A set, not a string, because the session may reach for either shell — but every member of that
+    set was written by this function, so nothing here is reading someone else's command.
+    """
+    return bool(command) and command.strip() in set(tickets_for(session, repo).values())
 
 
 def repo_root(cwd: str) -> str | None:
@@ -220,17 +257,28 @@ def format_held(repo: str, attempted: str = "", session: str = "") -> str:
         "the shell is exactly what is blocked. Pick whichever of these fits:",
     ]
     if session:
+        tickets = tickets_for(session, repo)
         out += [
             "",
             "  1. SUBSCRIBE, and get on with something else. Run this in the BACKGROUND",
             "     (run_in_background: true). It exits the moment the lock frees, and your harness",
             "     wakes you when it does. Meanwhile, go and do other work.",
             "",
-            f"     {ticket_for(session, repo)}",
+            "     ...if you are running it with a Bash / sh tool:",
+            f"       {tickets['sh']}",
             "",
-            "     Run it EXACTLY as written: it is a one-time ticket this refusal issued, and the",
-            "     gate allows that string and no other. Change one character and it is blocked like",
-            "     any other command.",
+            "     ...if you are running it with a PowerShell tool (note the leading `&` — PowerShell",
+            "     will not execute a quoted path without it):",
+            f"       {tickets['pwsh']}",
+            "",
+            "     Take the line for the shell you are actually about to use, and run it EXACTLY as",
+            "     written: it is a one-time ticket this refusal issued, and the gate allows those two",
+            "     strings and no other. Change one character and it is blocked like any other command.",
+            "",
+            "     Then CHECK ITS OUTPUT when your harness wakes you. A background task that dies on",
+            "     the spot also 'completes', and completing is the same signal as the lock freeing —",
+            "     so a broken waiter looks exactly like a granted one. It printed FREE, or it failed;",
+            "     do not assume which.",
             "",
             "  2. BLOCK and wait, if you have nothing else to do: call the MCP tool",
             "     lock_wait(repo, timeout_seconds). It returns the instant the lock frees.",
@@ -381,6 +429,89 @@ def hold_unknown(repo: str, session: str, intent: str,
     if warn := lock.needs_commit_warning(repo, session):
         notes.append(warn["message"])
     return None, notes
+
+
+def format_dirty_handback(repo: str, dirty: list[str], expires_in: float) -> str:
+    """What a session is told when it tries to walk away holding a lock on a mess.
+
+    Written to be ACTED ON, not merely read, and it offers three routes rather than one — because
+    "commit your work" is the wrong instruction for two of the three things that are actually in a
+    dirty tree at this moment, and a gate that gives wrong instructions gets ignored.
+    """
+    out = [
+        "DON'T GO IDLE HOLDING A DIRTY CHECKOUT — commit, ignore, or stash first.",
+        "",
+        f"You hold the lock on {repo} and you are about to hand control back to your human with "
+        f"{len(dirty)} uncommitted change(s) in the tree. If you do, this checkout stays locked "
+        f"for ~{int(expires_in)}s, and EVERY other session that touches it is refused — including "
+        "one that only wanted to run `ls`. That is the single most common way this lock has hurt "
+        "people (xag/repolock#4, #11): a session parks on a dirty tree and wanders off.",
+        "",
+        "In the tree right now:",
+    ]
+    out += [f"  {c}" for c in dirty[:12]]
+    if len(dirty) > 12:
+        out.append(f"  ...and {len(dirty) - 12} more")
+    out += [
+        "",
+        "Pick the one that is actually true of each, then stop again:",
+        "",
+        "  * IT IS YOUR WORK  → commit it. This is the good outcome: the next session inherits a",
+        "    diff instead of a surprise, and the lock is released the moment the tree is clean.",
+        "        git add -A && git commit -m \"...\"",
+        "",
+        "  * IT IS AN ARTIFACT  (a data dir, build output, a cache — `.devdata/`, `dist/`, `.venv/`)",
+        "    → do NOT commit it, and do not stash it either: something may be using it. Ignore it.",
+        "    This is the permanent fix — an untracked artifact directory makes the tree dirty",
+        "    FOREVER, so every session that ever stops here parks a lock on this repo.",
+        "        echo '<path>/' >> .gitignore && git add .gitignore && git commit -m \"ignore <path>\"",
+        "",
+        "  * IT IS HALF-FINISHED AND NOT WORTH A COMMIT  → park it, and say what it was.",
+        "        git stash push -u -m \"wip: <what you were doing>\"",
+        "",
+        "The lock releases itself as soon as the tree is clean — you do not have to call anything.",
+        "",
+        "If none of these is right and the work genuinely must sit uncommitted in the checkout, just",
+        "stop again: you will not be asked twice, and the lock will be held until its lease lapses.",
+    ]
+    return "\n".join(out)
+
+
+def hand_back(repo: str, session: str, already_asked: bool = False) -> tuple[str | None, list[str]]:
+    """The Stop boundary: the holder is returning control to its human. Returns (block, notes).
+
+    **The idle-dirty lock is not managed here; it is prevented.** The old rule was: dirty tree at
+    handback => keep the lock and let the lease run out, on the grounds that handing over
+    half-finished edits is worse than making the next session wait. Both halves of that were true,
+    and the conclusion was still wrong, because it accepted the dirty handback as a given and then
+    made everyone else pay for it. What it produced in practice (#11): a session parked on `chores`
+    with an untracked `.devdata/` — an artifact directory, not work at all — and the next session
+    was refused `ls && git log` for ten minutes.
+
+    So we refuse the premise instead. A session may not walk away holding a lock on a mess: it is
+    told to commit, ignore or stash, and the lock then releases itself against the clean tree. The
+    dirty handoff never happens, so there is nothing to protect anyone from.
+
+    `already_asked` is the harness's `stop_hook_active`, and it is what keeps this from being a
+    cage. We ask ONCE. If the tree is still dirty on the way out a second time, the session has
+    decided, and we fall back to the old behaviour — hold, mark idle, let the lease lapse. A gate
+    that will not let a session stop is worse than any lock it could be protecting.
+    """
+    v = lock.status(repo)
+    lk = v.get("lock") or {}
+    if v["status"] == "unlocked" or lk.get("session") != session:
+        return None, []                    # not ours — nothing to hand back
+
+    dirty = v.get("dirty") or []
+    if not dirty:
+        lock.release(repo, session)        # clean: let it go. The common, happy path.
+        return None, []
+
+    if not already_asked:
+        return format_dirty_handback(repo, dirty, v.get("expires_in") or 0), []
+
+    verdict = lock.go_idle(repo, session)  # asked once, still dirty: their call. Hold, and say so.
+    return None, [verdict["message"]] if verdict["status"] == "idle_dirty" else []
 
 
 def settle_unknown(repo: str, session: str) -> list[str]:

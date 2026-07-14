@@ -161,6 +161,84 @@ def lock_debug(repo: str) -> str:
     return json.dumps(repolock.status(repo), indent=2, sort_keys=True, default=str)
 
 
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, idempotentHint=True))
+def lock_disable(reason: str, clear_held_locks: bool = True) -> str:
+    """**The off switch.** Turn the working-copy lock off, on this machine, immediately — including
+    in sessions that are already running and already wedged.
+
+    Reach for this the moment the lock is doing damage: refusing work it should not refuse, holding
+    a checkout nobody is using, or handing out a waiter that does not run. It is not a big red
+    button to be afraid of — the lock is an optimisation on a convention, and a machine where nobody
+    can edit anything is strictly worse than one where two sessions might collide.
+
+    **This tool exists because the shell does not.** When the lock refuses a session, it refuses its
+    shell — so an off switch spelled as a shell command is unreachable exactly when it is needed. The
+    hook does not gate MCP tools, so this one always gets through. Never tell a blocked user to go
+    and run something in a terminal; call this.
+
+    It writes `~/.repolock/DISABLED`, which every adapter checks on every single call, so running
+    sessions are freed on their very next tool use — no restart, no settings.json edit (a harness
+    snapshots its hooks at startup and cannot see one anyway).
+
+    `clear_held_locks` also drops the lockfiles, so nothing stale is left to resurrect when it goes
+    back on. `reason` is written into the switch file for whoever finds it later — say what it did.
+
+    Turn it back on with `lock_enable`.
+    """
+    from repolock import toggle
+
+    v = toggle.disable(reason=reason, clear=clear_held_locks)
+    out = ["repo-lock is now OFF — every hook, in every session, running or not, is a no-op.",
+           f"reason: {reason}"]
+    if v["was_holding"]:
+        out.append(f"\nit was holding {len(v['was_holding'])} lock(s):")
+        for h in v["was_holding"]:
+            out.append(f"  {h['repo']}  session {(h['session'] or '?')[:8]}  {(h['intent'] or '')[:50]}")
+    out.append(f"\n{len(v['cleared'])} lockfile(s) cleared." if v["cleared"]
+               else "\nlockfiles left in place (they are inert while it is off).")
+    out.append("Re-enable with lock_enable when the cause is fixed.")
+    return "\n".join(out)
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, idempotentHint=True))
+def lock_enable() -> str:
+    """Turn the working-copy lock back on: disarm the panic switch AND re-wire the harness hooks.
+
+    Both halves, because "on" has to mean on. Removing the switch file while the hooks are missing
+    from settings.json yields a repolock that reports itself enabled and guards nothing — worse than
+    being off, because you would be relying on it.
+
+    New sessions pick the hooks up at startup; sessions already running snapshotted their hooks when
+    they started, so if the hooks had been removed those sessions stay unguarded until restarted.
+    """
+    from repolock import toggle
+
+    v = toggle.enable()
+    out = [toggle.render(toggle.state())]
+    if not v["wired"]:
+        out.append("\nWARNING: the hooks could not be written to settings.json — it is NOT guarding.")
+    if v["stale_locks"]:
+        out.append(f"\n{len(v['stale_locks'])} lapsed lock(s) remain on disk; the next write takes "
+                   "them over with a handoff.")
+    if v["env_override"] is not None:
+        out.append(f"\nWARNING: REPOLOCK_DISABLED={v['env_override']!r} is set in this server's "
+                   "environment and overrides the file.")
+    return "\n".join(out)
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
+def lock_switch() -> str:
+    """Is the lock on? Is it wired into the harness? What is it holding right now?
+
+    The one call that answers "why is/isn't this thing doing anything" — it distinguishes the three
+    states that look alike from inside a session: ON, switched OFF, and the dangerous middle one
+    where it believes it is on but its hooks were never wired.
+    """
+    from repolock import toggle
+
+    return toggle.render(toggle.state())
+
+
 def main() -> None:
     mcp.run()  # stdio
 

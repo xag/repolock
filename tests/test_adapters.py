@@ -13,6 +13,7 @@ anyone recognising the command.
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 
@@ -242,6 +243,135 @@ def test_the_waiter_exits_when_the_lock_frees(repo):
     run_hook(CLAUDE, {"hook_event_name": "Stop", "cwd": repo, "session_id": "A"})
 
     assert waitfor.main([repo, "--timeout", "5"]) == 0        # freed: exits 0 -> the harness wakes B
+
+
+def _real_shell(kind: str) -> list[str] | None:
+    """The shell a HARNESS actually spawns — which on Windows is not the one on PATH.
+
+    `shutil.which("bash")` here finds `C:\\Windows\\System32\\bash.exe`: the WSL launcher, which on
+    this machine has no distro and fails before it ever reaches python. Claude Code's Bash tool runs
+    `/usr/bin/bash` — Git Bash, from Git for Windows. Testing the ticket against WSL would be testing
+    a shell nobody uses, and would have let #10 through a second time.
+    """
+    if kind == "sh":
+        for c in (r"C:\Program Files\Git\bin\bash.exe", r"C:\Program Files\Git\usr\bin\bash.exe"):
+            if os.path.exists(c):
+                return [c, "-c"]
+        found = shutil.which("bash")
+        return [found, "-c"] if found and "system32" not in found.lower() else None
+    found = shutil.which("pwsh") or shutil.which("powershell")
+    return [found, "-NoProfile", "-Command"] if found else None
+
+
+@pytest.mark.parametrize("shell,spelling", [("sh", "sh"), ("pwsh", "pwsh")])
+def test_the_minted_ticket_actually_RUNS_in_the_shell_it_is_minted_for(repo, shell, spelling):
+    """The invariant this library shipped without, and paid for (xag/repolock#10).
+
+    Two tests already covered the ticket. One asserted the gate RECOGNISES it; the other called
+    `waitfor.main([repo])` in-process. Between them they never once put the minted string through a
+    shell — and the minted string could not survive one. `sys.executable` went in unquoted, spelled
+    with Windows backslashes, and bash ate every one of them:
+
+        C:UserstransProjectsrepolock.venvScriptspython.exe: command not found   (exit 127)
+
+    The waiter never ran, on any tape, ever. Two green tests and a feature that had never worked,
+    because the only boundary that mattered — a real shell parsing a real string — was the one place
+    neither test looked. A stub you never check against the real wire is not a test of the wire.
+
+    So: mint it, hand it to the actual shell, and require it to reach the lock. The repo is FREE
+    here, so a waiter that starts must print FREE and exit 0. A waiter that cannot start exits 127
+    and says `command not found` — which is precisely, and only, what this catches.
+    """
+    from repolock.hooks import common
+
+    launcher = _real_shell(shell)
+    if not launcher:
+        pytest.skip(f"no real {shell} on this machine")
+
+    ticket = common.tickets_for("B", repo)[spelling]
+    res = subprocess.run([*launcher, ticket], cwd=repo, capture_output=True, text=True,
+                         encoding="utf-8", errors="replace", timeout=120)
+    out = (res.stdout or "") + (res.stderr or "")
+
+    assert "command not found" not in out.lower() and res.returncode != 127, (
+        f"the ticket the gate mints cannot be run by the shell it is minted for:\n{out}")
+    assert res.returncode == 0 and "FREE" in out, (
+        f"the waiter did not reach the lock (exit {res.returncode}):\n{out}")
+
+
+def _stop(repo, session, already_asked=False):
+    payload = {"hook_event_name": "Stop", "cwd": repo, "session_id": session}
+    if already_asked:
+        payload["stop_hook_active"] = True
+    return run_hook(CLAUDE, payload)
+
+
+def test_a_session_may_not_walk_away_holding_a_lock_on_a_dirty_tree(repo):
+    """The #11 incident, at its root — and the fix is to refuse the premise, not manage it.
+
+    A session parked on `chores` holding the lock, its tree "dirty" with one untracked artifact
+    directory (`?? .devdata/`). The lock stayed for the full lease, and the next session was refused
+    `ls && git log` — a pure read — for ten minutes. The old rule accepted the dirty handback and
+    made everyone else pay for it.
+
+    So the handback is refused instead: commit, ignore, or stash. The lock then releases itself
+    against a clean tree, and there is no parked lock for anyone to trip over.
+    """
+    assert claude_shell(repo, "A", "echo wip > wip.txt").returncode == 0   # A writes, A holds
+    res = _stop(repo, "A")
+
+    assert res.returncode == 2, "a session was allowed to hand back holding a lock on a dirty tree"
+    assert "commit" in res.stderr.lower() and "stash" in res.stderr.lower()
+    assert ".gitignore" in res.stderr, "an artifact directory needs the ignore route, not a commit"
+    assert claude_edit(repo, "B").returncode == 2, "the lock should still be A's while it cleans up"
+
+
+def test_cleaning_the_tree_releases_the_lock_by_itself(repo):
+    """The good path, and the whole point of refusing the handback: A commits, and the checkout is
+    free. Nobody had to call release, and B walks in unblocked."""
+    assert claude_shell(repo, "A", "echo wip > wip.txt").returncode == 0
+    assert _stop(repo, "A").returncode == 2                      # refused: dirty
+
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "wip"], cwd=repo, check=True)
+
+    assert _stop(repo, "A").returncode == 0, "a clean tree must be allowed to hand back"
+    assert claude_edit(repo, "B").returncode == 0, "the lock was not released against a clean tree"
+
+
+def test_the_session_is_asked_once_and_then_left_alone(repo):
+    """The escape, and it is not optional: a gate that will not let a session stop is a worse
+    failure than any lock it could be protecting. `stop_hook_active` is the harness saying "you
+    already blocked this once" — so we hold the lock, say so, and get out of the way."""
+    assert claude_shell(repo, "A", "echo wip > wip.txt").returncode == 0
+    assert _stop(repo, "A").returncode == 2                      # asked once
+
+    res = _stop(repo, "A", already_asked=True)                   # ...and not twice
+
+    assert res.returncode == 0, "the session was refused its own stop twice — that is a cage"
+    assert "uncommitted" in res.stdout.lower()                   # held, and it says so
+
+
+def test_an_ignored_artifact_directory_does_not_hold_the_lock(repo):
+    """The permanent fix for the `.devdata/` class, and why the refusal names it explicitly.
+
+    An untracked artifact directory makes the tree dirty FOREVER, so every session that ever stops
+    in that repo parks a lock on it. Ignoring it is the cure — and git's own porcelain then stops
+    reporting it, so the handback is clean and the lock lets go on its own."""
+    os.makedirs(os.path.join(repo, ".devdata"), exist_ok=True)
+    with open(os.path.join(repo, ".devdata", "cache.bin"), "w") as f:
+        f.write("artifact")
+
+    assert claude_shell(repo, "A", "echo hi > b.txt").returncode == 0
+    assert _stop(repo, "A").returncode == 2                      # dirty: b.txt AND .devdata/
+
+    with open(os.path.join(repo, ".gitignore"), "w") as f:       # the route the refusal advises
+        f.write(".devdata/\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "ignore artifacts"], cwd=repo, check=True)
+
+    assert _stop(repo, "A").returncode == 0
+    assert claude_edit(repo, "B").returncode == 0, "an IGNORED artifact dir still held the lock"
 
 
 def test_a_read_hands_the_speculative_lock_straight_back(repo):

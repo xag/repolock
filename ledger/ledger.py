@@ -319,6 +319,134 @@ DECISIONS = [
                   payload={"why": "that un-backgrounds it. The session launched it precisely so it "
                                   "would not have to wait"}),
          ]),
+
+    Node(id="the-ticket-must-survive-the-shell", kind="decision",
+         name="The waiter's ticket is minted once per shell, and a test drives a real one",
+         payload={"rationale":
+                  "The gate mints the one command a blocked session may run — the background waiter "
+                  "that lets it go and do something else (waiting-is-a-subscription). It minted a "
+                  "single string, with `sys.executable` UNQUOTED and spelled the way Windows spells "
+                  "it, and bash ate every backslash as an escape:\n\n"
+                  "    C:UserstransProjectsrepolock.venvScriptspython.exe: command not found  (127)\n\n"
+                  "So the waiter had never run. Not 'ran badly' — never ran, not once, in the "
+                  "library's entire history: `wait_until_free` appears in ZERO of the 4528 recorded "
+                  "sessions on this machine. And because the refusal instructs the session to launch "
+                  "it with run_in_background, exiting 127 on the spot made the harness report the "
+                  "task as COMPLETED — which is the same signal it sends when the waiter exits "
+                  "because the lock freed. The escape hatch did not merely fail; it failed by "
+                  "reporting success, and the blocked session was told to go back to work.\n\n"
+                  "No single string survives both shells a harness may choose. Bash needs the path "
+                  "quoted (a space would split it) and forward-slashed (a backslash is an escape); "
+                  "PowerShell will not EXECUTE a quoted path without the call operator `&`, and `&` "
+                  "is a syntax error in bash. So mint both, label them by shell, and allow both. It "
+                  "remains a capability and not a classification: every member of the accepted set "
+                  "is a string this gate wrote itself, and byte equality is still the whole test.\n\n"
+                  "The rule that follows is the general one, and it is the point: TWO tests covered "
+                  "this ticket. One asserted the gate RECOGNISES the string; the other called "
+                  "`waitfor.main([repo])` in-process. Neither ever handed the string to a shell — "
+                  "the only boundary that could fail, and the one that did. An uninstrumented fake "
+                  "is relocated guessing, and two green tests around an unexercised boundary are "
+                  "worse than no tests, because they are believed."},
+         children=[
+             Node(id="alt-one-string-for-all-shells", kind="alternative",
+                  name="Keep one ticket string and make it shell-neutral",
+                  payload={"why": "there is no such string. A quoted path is inert in PowerShell "
+                                  "without `&`; `&` is a syntax error in bash. Unquoted forward "
+                                  "slashes work in both ONLY while no path contains a space — a "
+                                  "'works on my machine' that breaks on `C:/Users/John Smith/`"}),
+             Node(id="alt-ship-a-launcher-script", kind="alternative",
+                  name="Write a .cmd/.sh launcher and put its path in the ticket",
+                  payload={"why": "moves the quoting problem rather than solving it (the launcher's "
+                                  "own path can contain a space), and adds a generated file on disk "
+                                  "that must be kept in step with the interpreter it wraps"}),
+         ]),
+
+    Node(id="refuse-the-dirty-handback", kind="decision",
+         name="A session may not go home holding a lock on a dirty tree — commit, ignore or stash",
+         payload={"rationale":
+                  "The old rule: dirty tree at the Stop boundary => KEEP the lock and let the lease "
+                  "run out, because 'handing over a checkout full of half-finished edits is worse "
+                  "than making the next session wait'. Both halves of that sentence are true. The "
+                  "conclusion was still wrong, because it took the dirty handback as a GIVEN and "
+                  "then made every other session pay for it.\n\n"
+                  "What it produced (#11): a session parked on `chores` with one untracked "
+                  "directory in the tree — `?? .devdata/`, an artifact directory, not work at all — "
+                  "and the next session was refused `ls && git log`, a pure read, for ten minutes. "
+                  "And it was not a one-off: an untracked artifact dir makes a tree dirty FOREVER, "
+                  "so EVERY session that ever stopped in that repo parked a ten-minute lock on it. "
+                  "A livelock generator, installed by accident, in the shape of a safety feature.\n\n"
+                  "So refuse the premise. Claude Code's Stop hook can block the handback (exit 2) "
+                  "and hand the reason back to the model, so the session is told to commit its work, "
+                  "gitignore the artifact, or stash the scrap — and the lock then releases itself "
+                  "against the clean tree. The dirty handoff never happens, so there is nothing left "
+                  "to protect anybody from, and the idle-dirty lock simply ceases to exist.\n\n"
+                  "Three routes, not one, because 'commit your work' is the WRONG instruction for "
+                  "two of the three things actually in a dirty tree at that moment — an artifact "
+                  "must be ignored (committing it is a bug, stashing it may break a running "
+                  "process), and a scrap should be stashed. A gate that gives wrong instructions is "
+                  "a gate that gets ignored.\n\n"
+                  "We ask ONCE (`stop_hook_active`), then get out of the way and fall back to the "
+                  "old hold-and-lapse. A gate that will not let a session hand back to its human is "
+                  "a worse failure than any lock it could be protecting."},
+         children=[
+             Node(id="alt-idle-blocks-writes-observes-shells", kind="alternative",
+                  name="Let an idle holder block declared writes, but observe shells",
+                  payload={"why": "would have unblocked the read, and left a shell free to write "
+                                  "into a parked session's half-finished tree — trading a liveness "
+                                  "bug for a correctness one. It also still ACCEPTS the dirty "
+                                  "handback; it only makes it cheaper for everyone else"}),
+             Node(id="alt-untracked-dirt-releases", kind="alternative",
+                  name="Hold at idle only for TRACKED modifications; untracked-only dirt releases",
+                  payload={"why": "kills the `.devdata/` class exactly, and mis-handles the case "
+                                  "next door: `?? newfeature.py` is untracked AND is real "
+                                  "work-in-progress. It sorts dirt by git's bookkeeping rather than "
+                                  "by what it IS, which is the same category error as reading a "
+                                  "command to guess what it does"}),
+             Node(id="alt-short-idle-lease", kind="alternative",
+                  name="Park the lock as before, but cut the idle lease to ~60s",
+                  payload={"why": "makes the wound smaller without closing it: everyone still waits, "
+                                  "still for nothing, and a session's half-finished edits are still "
+                                  "abandoned in a shared checkout — now with a 60s fuse on them. "
+                                  "Kept as the fallback for the session that declines to clean up, "
+                                  "which is the only place it is the honest answer"}),
+         ]),
+
+    Node(id="the-off-switch-cannot-need-a-shell", kind="decision",
+         name="The off switch is an MCP tool and a file — never a command in a terminal",
+         payload={"rationale":
+                  "This lock sits on the write path of every agent session on the machine, and it "
+                  "has now taken the machine down four times (#4, #7, #10, #11). The switch that turns "
+                  "it off is therefore load-bearing, and it has exactly two hard requirements — both "
+                  "of which are consequences of WHEN it gets used, which is always the worst "
+                  "possible moment.\n\n"
+                  "It must not need a shell. When the lock misfires it REFUSES YOUR SHELL — that is "
+                  "what a refusal is — so an off switch spelled as a terminal command is unreachable "
+                  "at exactly the moment it is needed. The hook does not gate MCP tools, so the real "
+                  "surface is `lock_disable`/`lock_enable`; the CLI is a convenience for a human, "
+                  "not the mechanism.\n\n"
+                  "It must reach sessions that are ALREADY RUNNING. A harness snapshots its hooks at "
+                  "session start, so removing them from settings.json does nothing for the sessions "
+                  "currently wedged — which are precisely the ones you are trying to free. Only a "
+                  "file, read on every hook call, gets through (`~/.repolock/DISABLED`). That is why "
+                  "the switch is a file and not a config edit, and why it is checked on every call "
+                  "rather than at install.\n\n"
+                  "`lock_enable` also RE-WIRES the hooks, because 'on' has to mean on: a repolock "
+                  "that reports itself enabled while its hooks are missing from settings.json guards "
+                  "nothing and is trusted anyway, which is the worst of the three states."},
+         children=[
+             Node(id="alt-uninstall-the-hooks", kind="alternative",
+                  name="Turn it off by removing the hooks from settings.json",
+                  payload={"why": "cannot reach a running session — it snapshotted its hooks at "
+                                  "startup — so it frees everyone EXCEPT the sessions that are "
+                                  "actually stuck. Kept as a belt-and-braces flag (`off --unwire`), "
+                                  "never as the mechanism"}),
+             Node(id="alt-env-var-only", kind="alternative",
+                  name="REPOLOCK_DISABLED as the only switch",
+                  payload={"why": "a session cannot be handed an env var it was not launched with. "
+                                  "Kept as an override (it beats the file in BOTH directions, so a "
+                                  "test can re-enable the lock without deleting the machine's panic "
+                                  "file), and `toggle status` reports it precisely because it wins"}),
+         ]),
 ]
 
 HYPOTHESES = [
@@ -363,6 +491,18 @@ HYPOTHESES = [
                            "harmed first: this is what a falsifier is supposed to look like."}),
          ]),
 
+    # HOLED 2026-07-14 by xag/repolock#11. Not falsified — AMENDED, and the amendment is the lesson.
+    # The claim below reasons entirely about an ACTIVE holder, and on that ground it still stands.
+    # But it ends with the words "rather than a ten-minute lease (#4)", and a ten-minute lease is
+    # precisely what #11 cost a session that only wanted to run `ls && git log`. The holder was not
+    # active at all: it had gone home, and `go_idle` had PARKED its lock on a dirty tree for the
+    # remainder of the lease. The hypothesis never considered the idle path, so its claim was true
+    # of every case it had thought about and false in production.
+    #
+    # Worse, and this is the finding worth keeping: `kill-shell-starvation` COULD NOT FIRE on it.
+    # It was written to catch #4's shape — a non-writing holder refusing many consecutive calls —
+    # and #11 arrived as ONE refusal from a holder that HAD written. A falsifier calibrated to the
+    # last war is a falsifier that watches the wrong door. The kill below is the widened one.
     Node(id="hyp-serialising-shells-does-not-starve", kind="hypothesis",
          name="Holding the lock through a shell call does not starve a second session",
          payload={"claim": "A shell takes the lock for the duration of its own call and hands it "
@@ -371,6 +511,8 @@ HYPOTHESES = [
                            "rather than a ten-minute lease (#4). Reads through Read/Grep/Glob are "
                            "not gated at all, so a blocked session can always still inspect and "
                            "diagnose, which is the escape route #4's victims did not have.",
+                  "status": "holds for an ACTIVE holder; the IDLE holder was the hole (#11), and is "
+                            "now closed by refuse-the-dirty-handback",
                   "cadence": "every hook call"},
          children=[
              Node(id="kill-shell-starvation", kind="falsification",
@@ -380,6 +522,42 @@ HYPOTHESES = [
                            "whose fingerprint never moved) — the #4 shape returning through the "
                            "pessimistic hold. Fires on ANNOYANCE, before anything is lost, and it "
                            "is a query over a recording rather than a bug report from a human."}),
+             Node(id="kill-refused-by-a-holder-who-went-home", kind="falsification",
+                  payload={"claim":
+                           "A tape shows `acquire` returning `held` where the holder's record "
+                           "carries a non-null `idle_since` — a session refused by a holder that "
+                           "has gone back to its human and is running nothing at all.\n\n"
+                           "This is the door #11 came through, and the old falsifier was not "
+                           "watching it: ONE refusal, by a holder that HAD written, whose lock was "
+                           "parked rather than working. After refuse-the-dirty-handback an idle "
+                           "holder should not be holding a lock at all — the only survivor is the "
+                           "session that was asked to commit/ignore/stash and declined, which is "
+                           "deliberate and rare. So this firing more than occasionally means the "
+                           "handback refusal is not working, and it fires on the ANNOYANCE, "
+                           "with nothing lost, straight off any recording.",
+                           "fired_on": "2026-07-14 (retrospectively, on the #11 tape: "
+                                       "flight-20260714-110251-13056.jsonl)"}),
+         ]),
+
+    Node(id="hyp-the-dirty-handback-can-be-refused", kind="hypothesis",
+         name="A session told to commit, ignore or stash will actually do it",
+         payload={"claim": "refuse-the-dirty-handback rests on this and nothing else: that a Stop "
+                           "hook which refuses the handback and explains the three routes (commit "
+                           "your work / gitignore the artifact / stash the scrap) gets a CLEAN tree "
+                           "on the second stop, in the ordinary case. If a session routinely "
+                           "declines — or cannot, because the dirt is not its to resolve — then all "
+                           "we have added is one wasted turn before parking the same lock we parked "
+                           "before, and the honest move would be to shorten the idle lease instead.",
+                  "cadence": "every Stop with a dirty tree"},
+         children=[
+             Node(id="kill-the-model-will-not-clean-up", kind="falsification",
+                  payload={"claim":
+                           "A tape shows `go_idle` returning `idle_dirty` (the asked-once-and-"
+                           "declined path) on more than 1 in 4 of the Stops where the tree was "
+                           "dirty — i.e. the refusal is being ignored rather than acted on. "
+                           "Mechanical, needs no human to complain, and distinguishes the two "
+                           "outcomes that matter: a session that cleans up (the lock frees itself) "
+                           "from one that shrugs (the lock parks anyway, and this was theatre)."}),
          ]),
 
     Node(id="hyp-subagents-share-the-session-id", kind="hypothesis",

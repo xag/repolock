@@ -38,11 +38,18 @@ One developer, several AI agent sessions, one checkout.
 > Still open: writes through MCP tools are not seen at all
 > ([#3](https://github.com/xag/repolock/issues/3)).
 >
-> **The off switch, when it gets in your way:** `touch ~/.repolock/DISABLED` and every hook becomes a
-> no-op immediately — including in sessions already running, which snapshot their hooks at startup
-> and cannot be reached by editing config. Deleting the `hooks` block from `~/.claude/settings.json`
-> (or `~/.cursor/hooks.json`) uninstalls it for good
-> immediately. Nothing is left behind in your repos; the lock records live outside them.
+> **The off switch, when it gets in your way.** When this thing misfires it takes away your *shell*
+> — that is what a refusal is — so the off switch is deliberately not a shell command:
+>
+> - **from an agent session** (including one that is currently wedged): call the MCP tool
+>   **`lock_disable(reason)`**. The hook does not gate MCP tools, so it always gets through.
+>   `lock_enable()` puts it back; `lock_switch()` says whether it is on, wired, and what it holds.
+> - **from a terminal**: `python -m repolock.toggle off` (`on`, `status`).
+>
+> Either way it writes `~/.repolock/DISABLED`, which every hook checks on every call — so sessions
+> **already running** are freed on their next tool use. That matters because a harness snapshots its
+> hooks at startup: editing `settings.json` cannot reach the sessions that are actually stuck.
+> Nothing is left behind in your repos; the lock records live outside them.
 
 Git assumes the working tree has one author. Run two agent sessions against the same clone and
 that assumption silently fails: sessions overwrite each other's edits, and — subtler — a session
@@ -62,8 +69,11 @@ repolock is **a protocol plus a reference implementation, not a service**:
   Enforcement cannot be an MCP tool — a tool is something the model chooses to call, and the
   offending session never chooses to. A lock taken through one vendor's hook holds out a
   session arriving through the other's; the test suite executes exactly that.
-- **`repolock/server.py`** *(extra `mcp`)* — a read-mostly stdio MCP server for visibility and
-  the deliberate human override: `lock_status`, `lock_drift`, `lock_debug`, `force_unlock`.
+- **`repolock/server.py`** *(extra `mcp`)* — a read-mostly stdio MCP server for visibility, the
+  deliberate human override, and the off switch: `lock_status`, `lock_wait`, `lock_drift`,
+  `lock_debug`, `force_unlock`, and `lock_disable` / `lock_enable` / `lock_switch`. MCP is where
+  these belong precisely because the hook does not gate MCP tools — so they still work from inside
+  a session the lock has refused, which is the only moment anyone reaches for them.
 
 The point is cross-tool: every agent on the machine — Claude Code, Cursor, Codex CLI, whatever
 comes next — honoring the same lockfile. A mixed fleet is exactly the scenario the lock guards.
@@ -75,30 +85,31 @@ git clone https://github.com/xag/repolock && cd repolock
 uv sync            # or: pip install .
 ```
 
-Wire the hook at **user scope** (`~/.claude/settings.json`), so every repo on the machine is
-guarded — use an absolute path to a python that can import `repolock`:
+Then wire the hooks at **user scope** (`~/.claude/settings.json`), so every repo on the machine is
+guarded:
 
-```json
-{
-  "hooks": {
-    "PreToolUse": [{
-      "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash|PowerShell",
-      "hooks": [{"type": "command", "timeout": 20,
-                 "command": "\"<python>\" \"<checkout>/repolock/hooks/claude_code.py\""}]
-    }],
-    "PostToolUse": [{
-      "matcher": "Bash|PowerShell",
-      "hooks": [{"type": "command", "timeout": 20, "command": "<same>"}]
-    }],
-    "Stop":         [{"hooks": [{"type": "command", "timeout": 20, "command": "<same>"}]}],
-    "SessionStart": [{"hooks": [{"type": "command", "timeout": 20, "command": "<same>"}]}]
-  }
-}
+```bash
+python -m repolock.toggle on        # writes the hooks block; idempotent; leaves your other hooks alone
+python -m repolock.toggle status    # is it on? is it wired? what is it holding?
+python -m repolock.toggle off       # ...and off again, instantly, everywhere
 ```
 
-`PostToolUse` is not optional: it is where a shell write is *discovered*, because it is the first
-moment anyone honestly can. Without it, `PreToolUse` still guards the file-editing tools — which
-declare what they will write — but every shell runs unobserved.
+This used to be a JSON stanza you pasted in by hand, and that is precisely how you got the failure
+mode the library then had to detect at runtime: a `PostToolUse` that never made it across, and a lock
+that was therefore never handed back. **An install that can be got wrong by hand should be done by a
+program.** Four events are wired, and each one is load-bearing:
+
+| event | matcher | why |
+|---|---|---|
+| `PreToolUse`   | `Edit\|Write\|MultiEdit\|NotebookEdit\|Bash\|PowerShell` | acquire before a declared write; hold on speculation before a shell |
+| `PostToolUse`  | `Bash\|PowerShell` | where a shell write is *discovered* — the first moment anyone honestly can |
+| `Stop`         | — | the handback: commit/ignore/stash, then the lock frees itself |
+| `SessionStart` | — | the read-side drift check |
+
+`PostToolUse` is not optional. Without it, `PreToolUse` still guards the file-editing tools — which
+declare what they will write — but every shell runs unobserved, *and* the speculative lock a shell
+takes is never given back, so every `cat` holds the repo for a full lease. That is
+[#4](https://github.com/xag/repolock/issues/4), reintroduced by a config typo.
 
 Both shells belong in the matcher. The matcher is a list of *names*, and a name that is missing is
 a tool the hook never sees: on Windows `PowerShell` is the shell that actually runs, so a matcher
@@ -212,11 +223,24 @@ as the reference.
 | `REPOLOCK_FLIGHT_DIR` | where recordings land (default `~/.repolock/flight`)  |
 | `REPOLOCK_DISABLED`   | the panic switch; also `~/.repolock/DISABLED` (below) |
 
-**The panic switch.** `touch ~/.repolock/DISABLED` and every hook becomes a no-op immediately.
+**The panic switch.** `lock_disable("why")` from any agent session, or `python -m repolock.toggle
+off` from a terminal. Either writes `~/.repolock/DISABLED`, and every hook becomes a no-op
+immediately.
 
-A file, and checked on every hook call, rather than an install-time setting — because a harness
-snapshots its hooks when a session *starts*. Editing `settings.json` therefore cannot reach the
-sessions that are already running, which are precisely the ones you need to free. We learned that
-the expensive way: the hooks were uninstalled, a live session kept its old snapshot, and it was
-still being blocked minutes later. Uninstalling should never require restarting the work it is
-holding up.
+Two properties, and both of them are forced by *when* this gets used — which is always the worst
+possible moment:
+
+**It is a file, checked on every hook call**, not an install-time setting. A harness snapshots its
+hooks when a session *starts*, so editing `settings.json` cannot reach the sessions already running
+— which are precisely the ones you need to free. We learned that the expensive way: the hooks were
+uninstalled, a live session kept its old snapshot, and it was still being blocked minutes later.
+Uninstalling should never require restarting the work it is holding up.
+
+**It is an MCP tool, not a shell command.** When the lock misfires it refuses your *shell*. An off
+switch you have to type into a terminal is therefore unreachable at exactly the moment you need it —
+which is a funny thing to discover about a panic button. The hook does not gate MCP tools, so
+`lock_disable` always gets through; the CLI is a convenience for a human, never the mechanism.
+
+And `lock_enable` re-wires the hooks as well as clearing the switch, because *on* has to mean on: a
+repolock that reports itself enabled while its hooks are missing from `settings.json` guards nothing
+and gets trusted anyway, which is the worst of the three states.

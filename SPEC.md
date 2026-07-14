@@ -90,8 +90,31 @@ return verdicts, never raise: an exception in a hook is a session that cannot ed
   Force is the human's deliberate override, never the routine path.
 - When the holder goes **idle** (hands control back to its human):
   - clean tree → release; holding would be pure obstruction;
-  - dirty tree → do NOT release; record `idle_since` and `dirty_at_idle` and let the lease
-    lapse on its own schedule. The takeover handoff then says exactly what was left behind.
+  - dirty tree → the handback itself MUST be refused, where the harness allows it (see §7c). The
+    holder is told to **commit** its work, **ignore** the artifact, or **stash** the scrap; the
+    lock then releases itself against the clean tree, and no idle-dirty lock is ever created.
+  - dirty tree, and the holder declined when asked → record `idle_since` and `dirty_at_idle` and
+    let the lease lapse on its own schedule. The takeover handoff then says exactly what was left
+    behind. This is the fallback, not the rule: a gate that will not let a session hand back to
+    its human is worse than any lock it could be protecting.
+
+### 5a. Why the handback is refused rather than absorbed
+
+The rule here used to stop at "dirty tree → hold, and let the lease lapse", on the grounds that
+handing over half-finished edits is worse than making the next session wait. Both halves of that
+are true and the conclusion was still wrong: it accepted the dirty handback as a given, and then
+charged everybody else for it.
+
+In production (xag/repolock#11) that meant a session parked on a checkout whose only "dirt" was one
+untracked artifact directory — `?? .devdata/`, not work at all — and the next session was refused
+`ls && git log`, a pure read, for ten minutes. An untracked artifact directory makes a tree dirty
+*permanently*, so every session that ever stopped in that repo parked a full-lease lock on it. A
+livelock generator, in the shape of a safety feature.
+
+An implementation MUST therefore offer all three routes, not just "commit": an artifact must be
+**ignored** (committing it is a bug, and stashing it may break a process that is using it), work
+must be **committed**, and a scrap should be **stashed**. A gate that gives the wrong instruction
+for two of the three things actually in a dirty tree is a gate that gets ignored.
 
 ## 6. The anchor, the handoff, and the drift check
 
@@ -118,7 +141,14 @@ A harness adapter MUST:
    (§7b);
 3. block when the verdict is `held`, and say so in the terms obligation 8 sets out;
 4. surface the handoff verbatim on takeover;
-5. release-or-go-idle when the session returns control to the human;
+5. **refuse the dirty handback** when the session returns control to the human (§5, §5a), where the
+   harness gives it the means to. A clean tree releases. A dirty one MUST be refused, with the three
+   routes spelled out (commit / ignore / stash), so the lock is never *parked* on a mess. An adapter
+   MUST ask exactly **once** — harnesses cap or override a stop-hook that blocks repeatedly, and a
+   session that cannot hand back to its human is a worse failure than any lock — and then fall back
+   to hold-and-lapse. Where a harness's stop event cannot refuse (it is a notification, not a gate),
+   the adapter MUST fall back to hold-and-lapse and MUST say so, rather than claim a guarantee it
+   cannot deliver;
 6. run the drift check when a session starts or resumes;
 7. cover **every shell the harness exposes**, not the one its authors use. A harness that offers both
    `bash` and `powershell` and watches only the first is unguarded on the platform where the second
@@ -148,12 +178,33 @@ A harness adapter MUST:
      wrote itself**. That is a capability, not a classification: append one character and it is a
      different string, matches nothing, and is gated like any other command. Recognising your own
      token is not the same act as understanding someone else's command, and the distinction is what
-     keeps this from being #7 again;
+     keeps this from being #7 again.
+
+     The ticket MUST be **executable by the shell it is handed to**, and an implementation MUST have
+     a test that runs it in a real one. This is not pedantry; it is xag/repolock#10. The first
+     implementation minted a single string with the interpreter path unquoted and spelled with
+     Windows backslashes; bash ate every backslash as an escape (`command not found`, exit 127) and
+     the waiter had never run once in the library's history. Because the refusal tells the session to
+     launch it in the *background*, dying instantly was indistinguishable from waking because the
+     lock freed: the escape hatch failed by reporting success. Where a harness may pick more than one
+     shell, no single string suffices (a quoted path is inert in PowerShell without `&`; `&` is a
+     syntax error in bash), so the gate MUST mint one spelling per shell, label them, and accept all
+     of them — each is still a string it wrote itself;
 10. **fail open, loudly**: a crashing adapter must never wedge the machine — an unguarded write is
    bad, a laptop where nobody can edit anything is worse, and silent is worst;
-11. offer a **kill switch** that reaches sessions already running. A harness snapshots its hooks when
-   a session starts, so uninstalling by editing config cannot free the sessions that are stuck; a
-   file the adapter checks on every call can.
+11. offer a **kill switch** that reaches sessions already running, **and that does not need a shell.**
+   Both halves follow from *when* it gets used, which is always the worst possible moment:
+   - it must reach a running session. A harness snapshots its hooks when a session starts, so
+     uninstalling by editing config cannot free the sessions that are stuck — which are precisely the
+     ones you are trying to free. A file the adapter checks on every call can.
+   - it must not be a shell command. When the lock misfires it **refuses your shell** — that is what
+     a refusal *is* — so an off switch spelled as a terminal command is unreachable exactly when it is
+     needed. The hook does not gate MCP tools, so that is where the switch belongs; a CLI is a
+     convenience for a human, never the mechanism.
+
+   And **"on" must mean on**: an implementation that re-enables the lock without checking that its
+   hooks are still wired reports itself enabled while guarding nothing, which is worse than being
+   off, because it will be relied upon.
 
 ## 7a. Write detection is not decidable, and MUST NOT be attempted
 

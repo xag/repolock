@@ -28,6 +28,12 @@ MAX_BACKGROUND_WAIT = 4 * 3600      # a background process may wait far longer t
 
 
 def main(argv: list[str] | None = None) -> int:
+    for stream in (sys.stdout, sys.stderr):       # the harness reads UTF-8; Windows writes cp1252,
+        try:                                      # so an em-dash reaches the model as U+FFFD
+            stream.reconfigure(encoding="utf-8")
+        except (AttributeError, OSError):
+            pass
+
     ap = argparse.ArgumentParser(prog="repolock.waitfor")
     ap.add_argument("repo")
     ap.add_argument("--ticket", default="", help="the one-time ticket the refusal issued")
