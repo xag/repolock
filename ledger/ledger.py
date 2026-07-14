@@ -741,8 +741,7 @@ DEBTS = [
             Node(id="gate-mcp-on-a-declared-target", kind="discharge",
                  name="Gate an MCP tool the moment its harness declares what it will write — a path "
                       "in the tool input, the way Edit carries one — and it joins obligation 1",
-                 payload={"competence": "whoever owns the harness's MCP tool schema; nothing in this "
-                                        "library can grant itself the fact it is missing",
+                 payload={"competence": "whoever owns the harness's MCP tool schema",
                           "note": "The debt exists because the call arrives with no declared target, "
                                   "so there is nothing to lock ON before it runs. Given one, the "
                                   "tool stops being unknown, is gated before it runs like any Edit, "
@@ -750,6 +749,33 @@ DEBTS = [
                                   "the calls that carry no target, which is what keeps the off "
                                   "switch reachable. Discharged by that fact arriving, never by "
                                   "deciding the risk feels small."}),
+
+            # This discharge was written as: "whoever owns the harness's MCP tool schema; nothing in
+            # this library can grant itself the fact it is missing." That sentence was FALSE, and
+            # believing it is what made the debt look permanent — which is the most dangerous thing
+            # a debt can look, because nobody pays a debt they have been told cannot be paid.
+            Node(id="scope-declared-by-the-agent", kind="discharge",
+                 name="Have the AGENT declare the scope it will write, and reserve it before any "
+                      "tool runs (xag/repolock#14)",
+                 payload={"competence": "this library, plus an agent that declares a scope — no "
+                                        "vendor has to change anything, because the declaration "
+                                        "arrives over MCP, which is ungated by construction (§7c)",
+                          "note": "The missing fact is not a property of the harness's tool schema. "
+                                  "It is a property of the AGENT'S INTENT, and the agent can be made "
+                                  "to say it out loud before it acts.\n\n"
+                                  "It also moves WHEN the collision is prevented, which is the whole "
+                                  "trick. Today we prevent at the WRITE, which is why MCP is a hole: "
+                                  "the call declares nothing, so there is nothing to gate on short of "
+                                  "gating the channel — and the channel carries the off switch. Under "
+                                  "a reservation we prevent at the SCOPE: a write landing inside my "
+                                  "region cannot collide with anyone, because nobody else is "
+                                  "permitted there. The ungated channel stays ungated and the hole "
+                                  "still closes.\n\n"
+                                  "NOT free, and #14 states the price: it trades hard exclusion for a "
+                                  "contract on the shell path, which is the exact trade §7b refuses. "
+                                  "So it discharges this debt only as a decision that SUPERSEDES that "
+                                  "one, argued in the open — never by quietly widening what counts as "
+                                  "sound."}),
         ],
     ),
 ]
