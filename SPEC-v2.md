@@ -103,12 +103,14 @@ none of it. This is conservative two-phase locking, and it is *meant* to be the 
 deadlock: no incremental acquisition, therefore no cycle, therefore no wait-for graph, no detection,
 no victim selection, and nothing to debug at 2am on a wedged laptop.
 
-> **The tapes say this is not enough (§10.1).** A scope inferred from a session's first write is
-> wrong for **92%** of real sessions, which are **wide** — a median of 20 paths across 3 top-level
-> directories, the worst 129 across 15. Agents discover what they must touch as they go. So `extend`
-> is **the normal path, not the exception**, and the deadlock-freedom above is a property of a rule
-> nobody will be able to follow. §5 therefore carries the design's weight, and it must be built as
-> the main road rather than the escape hatch.
+> **`extend` must be a first-class path, not an escape hatch (§5).** Under v1, sessions are wide and
+> spread: a scope inferred from the first write is wrong for 92% of them (§10.1). That number is
+> **evidence about v1, not v2** — agents spread because containment bought them nothing — so it must
+> NOT be read as "agents cannot declare". But discovery is intrinsic to the work: even a disciplined
+> agent, deliberately containing itself, will sometimes find it must touch one more module. So
+> extension happens, incremental acquisition survives, and the deadlock-freedom above is a property
+> of the *happy* path only. **Whether `extend` is the exception or the main road is the thing the
+> trial (§11) has to measure** — and it decides how much of §5 has to be real.
 
 **A conflict is an answer, not a refusal.** v1 tells a blocked agent *why* it is blocked and hands it
 a way to wait. v2 tells it **who holds what**, so it can come back with a scope that fits and proceed
@@ -287,29 +289,37 @@ handback (§5, §5a); fail-open-loudly; the off switch (§7 obligation 11); **an
    | moments where two sessions were alive on one checkout at once | **2** |
    | …of those, genuinely disjoint (perfect foresight, no shared file or dir) | **2 — both of them** |
 
-   Read it in three parts, because it does not all point one way.
+   **Most of this table cannot be used to judge v2, and saying otherwise was an error.** It measures
+   agents *under v1* — agents with no way to see each other, no reason to contain themselves, and no
+   cost for spreading. v2 changes the information they act on, so it changes the behaviour being
+   measured. Predicting a new regime with a behavioural relationship estimated under the old one is
+   the **Lucas critique**, and it is exactly what the first draft of this section did.
 
-   **For v2:** every observed collision was v1 refusing work that had no reason to be refused. Both
-   pairs were fully disjoint — not merely different files, different *directories*. That is precisely
-   the case v2 exists for, and v1 got it wrong both times it arose.
+   **Dies with the regime — evidence about v1, not about v2:**
 
-   **Against v2:** *contention is rare.* Two overlapping pairs in two days of real work — and that is
-   an **over**-count, since a session id spans hours and the windows are generous. The pain v2
-   relieves is occasional; the machinery it demands (negotiation, extension, violation handling, a
-   weaker exclusion guarantee) is paid for continuously. **The burden of proof is on v2, and this
-   table does not discharge it.**
+   - **the 92%.** Agents spread because narrowness bought them nothing and they could not see whom it
+     would cost. An agent that can *see* what is free has a reason to stay inside it, and to file an
+     issue splitting off the rest instead of wandering into it. v2's whole claim is that it removes
+     the cause of this number.
+   - **"contention is rare".** The tape records a world where a whole-checkout lock punishes
+     concurrency. One-session-at-a-time is precisely the habit v1 trains. This is v1's *output*, not
+     evidence about demand.
+   - **"sessions are wide".** Width is what you get when narrowness is unrewarded.
 
-   **And it breaks two things this document said:** sessions are **wide** and they **spread** (92%),
-   so `declare`-up-front cannot carry the deadlock-freedom argument (§3) — `extend` is the main road.
-   And every writer commits, so `git:index` must be short-held or v2 degenerates into v1 (§1b).
+   **Survives, because it is not about behaviour:**
 
-   **What this study cannot say.** N is small, it is two days, and it is one human. Worse, it is
-   **selection-biased in v1's favour**: the tape records a world in which the whole-checkout lock
-   already makes concurrent sessions painful, so a habit of running one at a time is exactly what it
-   would produce. It measures the world v1 made. Re-run it after any period of deliberately parallel
-   work before betting anything on the frequency of contention.
+   - **13 of 13 writing sessions committed.** Agents will still commit under v2 — this is a fact
+     about working with git, not about the lock. `git:index` is therefore needed by *every* writer,
+     which is what forces §1b: take it briefly, never hold it for the life of a scope.
+   - **both observed collisions were genuinely disjoint** — different *directories*, not merely
+     different files. That is an observation of what happened, not a prediction: twice out of twice,
+     v1 refused work it had no reason to refuse.
 
-   Reproduce: the study is `scope_study.py` / `scope_study2.py` against `~/.repolock/flight`.
+   **So the study yields one design constraint (§1b) and no verdict.** The question it was built to
+   settle — *will agents contain their work when containment is rewarded and visible?* — is not
+   answerable from tapes of agents who were never offered the deal. **It has to be tried.** §11.
+
+   Reproduce: `studies/scope_study.py` / `scope_study2.py` against `~/.repolock/flight`.
 2. **Who is an agent?** v1 keys on the harness session id, and subagents share their parent's
    (`hyp-subagents-share-the-session-id`). Scopes make that reentrancy sharper, not softer: two
    subagents of one session with disjoint scopes are two writers with one identity.
@@ -319,3 +329,47 @@ handback (§5, §5a); fail-open-loudly; the off switch (§7 obligation 11); **an
    rejected alternative it is, with this sentence as the reason.
 4. **`please_narrow` and starvation.** A holder that always declines is a holder that starves
    everyone else, and v2 has no preemption by design (§3). Is the lease the only backstop?
+
+## 11. The trial: v2 cannot be argued into existence, only run
+
+The central claim — **agents will contain their work when containment is visible and rewarded** — is
+not a fact about code. It is a fact about how agents behave *once they can see each other*, and no
+amount of staring at v1's tapes will settle it (§10.1). It is also not a matter of taste: it is a
+**hypothesis**, it is cheap to test, and it fails loudly if it is false.
+
+So it gets tried, on this machine, with the recorder on.
+
+### 11a. What makes the trial safe to run
+
+- **Silence is `**` (§4).** Any session that does not declare behaves exactly as under v1. The trial
+  therefore cannot be *worse* than today for anything that does not opt in.
+- **The witness (§7) is what produces the evidence**, and it is already built: the fingerprint records
+  every write on every hook call, and recording is on by default.
+- **The off switch (v1 §7 obligation 11) is untouched.** A failing experiment on the write path of
+  every session on the machine must be stoppable in one MCP call, from inside a wedged session.
+
+### 11b. What is measured — and these are the falsifiers, not a dashboard
+
+| the claim | what kills it, on a tape |
+|---|---|
+| **agents contain themselves** once they can see what is free | a session's writes land outside its declared scope at a rate comparable to v1's 92% — i.e. declaration changed nothing, and §7b's alarm becomes noise nobody reads |
+| **declaration is roughly right up front** | `extend` is called on most tasks — in which case incremental acquisition is the norm, deadlock is the main surface (§3, §5), and conservative locking was the wrong foundation |
+| **scopes buy real concurrency** | sessions that overlap in time still conflict on scope with the same frequency as they would have collided under v1 — the work genuinely overlaps, and no protocol can fix that |
+| **negotiation converges** | `please_narrow` is declined, or ignored, in the ordinary case — the channel is then a suggestion box, and starvation (§10.4) is the real behaviour |
+| **the exclusion trade (§7a) was worth it** | any out-of-scope write destroys work that was not recoverable by `git revert`. **One** of these is enough. It is the thing v1 never allowed, and the only outcome that says the trade itself was wrong rather than merely expensive |
+
+The last row is the one that matters. Every other failure costs annoyance and can be measured for a
+week. That one costs a human their work, and it is the reason the trial runs **on one machine, with
+one human, who knows it is running** — not shipped to anyone else first.
+
+### 11c. What "it worked" looks like
+
+Not "no violations". Violations are *expected* — discovery is intrinsic, agents will misjudge, and
+§7b exists precisely for that. It worked if:
+
+- containment is the norm and violations are **rare and recovered**, rather than routine and ignored;
+- sessions that could have run in parallel **did**, where v1 would have refused them;
+- and no one lost work.
+
+If it does not work, the way back is one line of config, because **v1 is the degenerate case of v2**
+(§4). That is the property that makes this worth trying at all.
