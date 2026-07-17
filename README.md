@@ -88,6 +88,18 @@ it off.
 writes `~/.transponder/DISABLED`, which every hook checks on every call, so running sessions go quiet
 on their next tool use. `lock_enable` disarms and re-wires the hooks.
 
+### The tray (Windows)
+
+The same switch as an icon in the notification area — left-click flips it, the colour is the state:
+green (on and wired), grey (off), amber (says on but the hooks are unwired or an env override is
+lying to you). It is a face on `toggle`, not a second switch: it polls the same file agents flip,
+so it stays honest when a session calls `lock_disable` behind your back.
+
+```bash
+uv sync --extra tray
+pythonw -m transponder.tray    # headless; a second launch bows out instead of stacking icons
+```
+
 ## Environment
 
 | variable                 | meaning                                                    |

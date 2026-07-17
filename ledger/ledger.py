@@ -623,6 +623,33 @@ DECISIONS = [
                                   "test can re-enable the lock without deleting the machine's panic "
                                   "file), and `toggle status` reports it precisely because it wins"}),
          ]),
+
+    Node(id="tray-is-a-face-not-an-authority", kind="decision",
+         name="The tray icon is a third face on the one switch, never a second switch",
+         payload={"rationale":
+                  "A human at the desktop should be able to see whether the transponder is on and "
+                  "flip it without opening a terminal — the-off-switch-cannot-need-a-shell, extended "
+                  "to a human whose hands are on a mouse. So `transponder.tray` (extra `tray`: "
+                  "pystray + Pillow, keeping core-zero-deps) draws an icon in the notification "
+                  "area.\n\n"
+                  "The decision is what the tray is NOT: it holds no state and knows no second "
+                  "path. It reads `toggle.state()` and flips through `toggle.enable`/`disable`, so "
+                  "a click and an agent's `lock_disable` are indistinguishable to the rest of the "
+                  "system. And it POLLS rather than remembering what it last did, because the "
+                  "switch it displays is shared — an icon showing ON over a machine an agent just "
+                  "switched off would be the map lying, which is this project's cardinal sin. The "
+                  "third state (amber: claims ON while unwired or env-overridden) is rendered, not "
+                  "rounded to green, for the same reason toggle.render() warns about it."},
+         children=[
+             Node(id="alt-tray-own-flag", kind="alternative",
+                  name="A tray app with its own on/off flag or cached state",
+                  payload={"why": "two authorities over one switch drift, and the icon becomes a "
+                                  "confident liar the first time an agent flips the file under it"}),
+             Node(id="alt-shell-shortcut", kind="alternative",
+                  name="A pinned pair of .lnk shortcuts running `toggle on`/`toggle off`",
+                  payload={"why": "write-only — shows nothing. The value of the icon is the STATE "
+                                  "being visible at a glance, ON/OFF/lying, before any click"}),
+         ]),
 ]
 
 HYPOTHESES = [

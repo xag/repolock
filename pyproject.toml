@@ -12,6 +12,7 @@ dependencies = []
 [project.optional-dependencies]
 mcp = ["mcp[cli]>=1.2"]
 flight = ["flight-recorder @ git+https://github.com/xag/flight-recorder"]
+tray = ["pystray>=0.19", "pillow>=10"]
 
 [dependency-groups]
 dev = [
