@@ -474,41 +474,42 @@ DECISIONS = [
          ]),
 
     Node(id="information-not-exclusion", kind="decision",
+         meta={"amended": "9b985b966e26 tightened under the 600-word budget; every claim kept"},
          name="Scratch the mutex entirely: nothing is ever refused, and information is the model",
          payload={"rationale":
                   "The user's sentence, which the first trial build implemented only by half: 'we "
                   "are not blocking agents, just giving them a channel to negotiate and "
                   "collaboratively prevent breaking each other's work.' The build kept four kinds "
                   "of refusal anyway — the v1 mutex for undeclared sessions, a teaching-refusal, a "
-                  "scope gate on declared writes, a v1-lock check on scoped agents — on the "
-                  "argument that silence must stay safe for agents who never heard of the protocol. "
+                  "scope gate on declared writes, a v1-lock check on scoped agents — arguing "
+                  "silence must stay safe for agents who never heard of the protocol. "
                   "That argument had a flaw the user exposed by hitting it: THE COURIER REACHES "
                   "NON-PARTICIPANTS TOO. The hook prints into every agent's context on every tool "
-                  "call, so an undeclared agent can be TOLD another agent is mid-change without "
+                  "call, so an undeclared agent can be TOLD another is mid-change without "
                   "being REFUSED anything. Making the cooperation bet for declared agents while "
                   "refusing it for undeclared ones was incoherent — same bet, make it everywhere. "
-                  "And the race that interrupted the trial's very first pilot declaration was the "
+                  "And the race that interrupted the trial's first pilot declaration was the "
                   "kept-mutex biting, on cue.\n\n"
-                  "So v1 is deleted, not superseded-in-place: the lease-lock, the pessimistic hold, "
+                  "v1 is deleted, not superseded-in-place: the lease-lock, the pessimistic hold, "
                   "the tickets and the waiter, the takeover handoff, the Cursor adapter, and every "
                   "test that pinned refusal behaviour. What remains never refuses: the claims map "
-                  "(scope.py — a conflicting declare is not RECORDED, which keeps the map coherent, "
-                  "but no tool call is ever blocked), the witness (witness.py — what actually "
-                  "happened, with violations named loudly to their author, remedy attached), the "
-                  "courier (hooks — the shared-checkout intro, the pre-write heads-up), and the "
-                  "drift check. Deadlock ceases to exist by construction: nothing blocks, so "
-                  "nothing can cycle, and §5's entire extend-deadlock apparatus evaporates.\n\n"
-                  "ONE deliberate exception, flagged to the user and accepted: the Stop boundary "
-                  "may block a DEPARTING session's handback, once, to ask it to commit/ignore/stash "
-                  "a dirty tree. It refuses no other agent anything, ever, and demoting it to a "
-                  "note would make it prose that cannot fire.\n\n"
-                  "What is knowingly given up: exclusion. Two agents CAN now write one region; the "
+                  "(scope.py — a conflicting declare is not RECORDED, the map stays coherent; no "
+                  "call is blocked), the witness (witness.py — what happened, violations "
+                  "named to their author, remedy attached), the courier (hooks — the "
+                  "shared-checkout intro, the pre-write heads-up), and the drift check. Deadlock "
+                  "ceases by construction — nothing blocks, nothing cycles — and §5's "
+                  "extend-deadlock apparatus evaporates.\n\n"
+                  "ONE deliberate exception, flagged and accepted: the Stop boundary may block a "
+                  "DEPARTING session's handback, once, to ask commit/ignore/stash of a dirty "
+                  "tree. It refuses no other agent anything; demoted to a note it would be prose "
+                  "that cannot fire.\n\n"
+                  "Knowingly given up: exclusion. Two agents CAN now write one region; the "
                   "witness names it after the fact. Every failure in this library's recorded "
                   "history was an agent that did not know another agent was there — ignorance, not "
                   "malice — and information cures ignorance at a fraction of the price of a mutex "
                   "that took the machine down four times (#4, #7, #10, #11) and whose only two "
-                  "genuine collisions-avoided were between sessions working DIFFERENT directories. "
-                  "Deterrence is explicitly NOT the mechanism (an agent has no memory across "
+                  "genuine collisions-avoided were between sessions in DIFFERENT directories. "
+                  "Deterrence is NOT the mechanism (no memory across "
                   "sessions, no reputation, no future to lose): visibility plus a witness is."},
          links={"supersedes": ["hold-the-lock-through-the-unknown", "a-refusal-must-be-actionable",
                                "waiting-is-a-subscription", "the-ticket-must-survive-the-shell",
@@ -516,13 +517,14 @@ DECISIONS = [
                                "the-background-task-cannot-be-observed"]},
          children=[
              Node(id="alt-keep-v1-as-degenerate-case", kind="alternative",
+                  meta={"amended": "bd0a0693f6c1 tightened with its entry; claim kept"},
                   name="Keep the mutex as the default for undeclared sessions (silence is `**`)",
                   payload={"why": "the first trial build. Defensible on paper — non-participants "
-                                  "keep yesterday's protection — and incoherent in substance: it "
-                                  "makes the cooperation bet only for agents who opted in, while "
-                                  "the courier could inform the others just as well. In practice "
-                                  "it kept the whole lease/liveness machine alive for the sake of "
-                                  "a default, and that machine raced the trial's first pilot"}),
+                                  "keep yesterday's protection — and incoherent: the bet made "
+                                  "only for agents who opted in, while the courier could inform "
+                                  "the others just as well. And it kept the lease/liveness "
+                                  "machine alive for a default — the machine that raced the "
+                                  "trial's first pilot"}),
              Node(id="alt-gate-only-declared-writes", kind="alternative",
                   name="Hybrid: never gate shells or MCP, but still refuse an Edit into another's region",
                   payload={"why": "the write is knowable there, so prevention is free of guessing — "
@@ -863,6 +865,7 @@ DEBTS = [
     Node(
         id="mcp-writes-settle-late",
         kind="debt",
+        meta={"amended": "5bc3134bbb35 tightened under the 600-word budget; every claim kept"},
         name="[RESOLVED: the mutex was deleted everywhere] On the MCP path there was no mutex — a "
              "write was detected one call after it landed",
         payload={
@@ -879,15 +882,13 @@ DEBTS = [
                 "This is a DEBT and not a hypothesis, and the distinction is the one this ledger "
                 "was rebuilt to keep honest. Nothing about it is uncertain. The hole is reachable "
                 "by construction, it is reachable today, and I know exactly what would close it — "
-                "so filing it as a belief awaiting evidence, with a falsifier that fires the first "
-                "time somebody loses work, would be hiding it behind the shape of an experiment. "
-                "That is the mistake hold-the-lock-through-the-unknown was written to reverse, and "
-                "it does not get to come back through a different door.\n\n"
-                "It is narrower than it sounds, which is why it is carried rather than paid for at "
-                "the cost of the escape hatches: an MCP tool has to be able to write the filesystem "
-                "at all to reach it. Of the servers on this machine exactly one can — "
-                "`mcp__ide__executeCode`, which runs code in a kernel — and the rest are remote "
-                "calls that cannot touch a working copy.",
+                "filing it as a belief awaiting evidence, a falsifier firing the first time "
+                "somebody loses work, would hide it behind the shape of an experiment: the "
+                "mistake hold-the-lock-through-the-unknown was written to reverse.\n\n"
+                "It is narrower than it sounds — an MCP tool must be able to write the "
+                "filesystem at all to reach it. On this machine exactly one can "
+                "(`mcp__ide__executeCode`, code in a kernel); the rest are remote calls that "
+                "cannot touch a working copy.",
         },
         params={
             "prevents_the_collision": Quantity(

@@ -147,7 +147,7 @@
   {
     "path": "information-not-exclusion",
     "kind": "decision",
-    "digest": "0a9c13e87bfa"
+    "digest": "9b985b966e26"
   },
   {
     "path": "information-not-exclusion/alt-demote-stop-ask-to-a-note",
@@ -162,7 +162,7 @@
   {
     "path": "information-not-exclusion/alt-keep-v1-as-degenerate-case",
     "kind": "alternative",
-    "digest": "6c5a567882c3"
+    "digest": "bd0a0693f6c1"
   },
   {
     "path": "liveness-lease-and-pid",
@@ -212,7 +212,7 @@
   {
     "path": "mcp-writes-settle-late",
     "kind": "debt",
-    "digest": "13d0ebbd841b"
+    "digest": "5bc3134bbb35"
   },
   {
     "path": "mcp-writes-settle-late/gate-mcp-on-a-declared-target",

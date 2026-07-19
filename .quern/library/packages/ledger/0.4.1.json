@@ -1,0 +1,933 @@
+{
+  "name": "ledger",
+  "version": "0.4.1",
+  "description": "The design ledger as checkable data: decisions carrying the alternatives they rejected, hypotheses carrying what would kill them, and debts carrying the condition that discharges them. A debt's params are ungrounded by construction, so `grounding/untrusted_via` can ask a gate — a release, a publication, a cut, a trade — whether anything unsound is about to pass through it. The point is not to write the caveat down; a README already does that, and a README cannot fire. The point is that the caveat goes red. Entries also declare what they `rests_on`, so a claim goes red when its grounds are superseded or deleted rather than waiting for someone to remember; `retraction` makes removal itself a recorded act, checkable against the roll committed beside the tree; and `supersedes`, on every entry kind and across them, is the one channel a correction travels by — the roll digests what each entry says, so a rewrite-in-place goes red instead of passing as an edit.",
+  "publisher": "standard library",
+  "requires": [
+    {
+      "name": "grounding",
+      "version": "1.0.0"
+    }
+  ],
+  "vocabulary": [
+    {
+      "kind": "decision",
+      "description": "A choice made deliberately, kept so a later reader can tell it from an accident. Its children are the alternatives it rejected — as nodes, so 'what did we already rule out, and why' survives the rewrite that deletes the comment. A decision that is later reversed is not edited: the new decision `supersedes` it, and the core's supersession verb keeps both readable. A decision that only holds while some earlier one holds says so with `rests_on`, and stops being merely readable: it goes red when its grounds are withdrawn.",
+      "params": {},
+      "links": {
+        "supersedes": "the entry this one replaces. An entry that said something false is not edited (the roll digests what every entry says, and an unacknowledged rewrite goes red) and not retracted (it was valid; being wrong is not the same as never having belonged): the corrected entry supersedes it, both stay readable, and everything resting on the old one goes red until re-aimed. Cross-kind on purpose — a decision may moot a hypothesis, a corrected debt replaces the flawed one. Children (an alternative, a falsification, a discharge, a tombstone) do not declare it: a child has no standing of its own, and is corrected by superseding the entry it belongs to.",
+        "rests_on": "the entries this one would not survive without — its grounds. Not decoration: `unsupported(self, 'rests_on')` counts the targets that have been superseded or deleted, and the rule below goes red while any of them has. This is the edge a flat ledger writes as prose ('the speed-up above is only sound because of it'), where nothing can act on it and a reader has to hold the whole list in mind to notice that the ground moved."
+      },
+      "operations": {}
+    },
+    {
+      "kind": "alternative",
+      "description": "An option that was considered and NOT taken, and why not (payload.why). Its value is entirely in being findable later: most bad re-litigation is someone re-proposing a thing that was already rejected for a reason nobody wrote down.",
+      "params": {},
+      "links": {},
+      "operations": {}
+    },
+    {
+      "kind": "hypothesis",
+      "description": "A belief held provisionally — something believed but not yet established. It must carry at least one falsification child; a belief with no condition that would kill it is not a hypothesis, it is a mood. A hypothesis is also the kind most often invalidated sideways: not falsified by observation but rendered moot when the decision it was about is reversed, and there is nothing left to observe. That is what `rests_on` catches.",
+      "params": {},
+      "links": {
+        "supersedes": "the entry this one replaces. An entry that said something false is not edited (the roll digests what every entry says, and an unacknowledged rewrite goes red) and not retracted (it was valid; being wrong is not the same as never having belonged): the corrected entry supersedes it, both stay readable, and everything resting on the old one goes red until re-aimed. Cross-kind on purpose — a decision may moot a hypothesis, a corrected debt replaces the flawed one. Children (an alternative, a falsification, a discharge, a tombstone) do not declare it: a child has no standing of its own, and is corrected by superseding the entry it belongs to.",
+        "rests_on": "the entries this one would not survive without — its grounds. Not decoration: `unsupported(self, 'rests_on')` counts the targets that have been superseded or deleted, and the rule below goes red while any of them has. This is the edge a flat ledger writes as prose ('the speed-up above is only sound because of it'), where nothing can act on it and a reader has to hold the whole list in mind to notice that the ground moved."
+      },
+      "operations": {}
+    },
+    {
+      "kind": "falsification",
+      "description": "The observation that would kill the hypothesis above it. Carries a prose payload.claim and, where the claim is mechanically checkable, a payload.expr in the rule grammar plus payload.cadence — the same shape a watched criterion takes, so a ledger entry can graduate into a live check without being rewritten.",
+      "params": {},
+      "links": {},
+      "operations": {}
+    },
+    {
+      "kind": "debt",
+      "description": "Something known-unsound, carried deliberately, with its cost stated rather than forgotten. Its params hold the unsound values and are NOT grounded — that is what makes the debt legible to `grounding/*` and therefore to a gate. Discharging a debt is not deleting the node: it is someone competent checking those params and grounding them, which is exactly the act the debt was waiting for. The substrate does not care who that is — only that it happened. A debt incurred BY a decision links `rests_on` at it: reverse the decision and the debt is no longer a price being paid, it is a leftover, and it goes red until someone says which. A debt whose PREMISE turns out false is neither paid nor invalid — it is superseded by the corrected debt, and stands.",
+      "params": {},
+      "links": {
+        "supersedes": "the entry this one replaces. An entry that said something false is not edited (the roll digests what every entry says, and an unacknowledged rewrite goes red) and not retracted (it was valid; being wrong is not the same as never having belonged): the corrected entry supersedes it, both stay readable, and everything resting on the old one goes red until re-aimed. Cross-kind on purpose — a decision may moot a hypothesis, a corrected debt replaces the flawed one. Children (an alternative, a falsification, a discharge, a tombstone) do not declare it: a child has no standing of its own, and is corrected by superseding the entry it belongs to.",
+        "rests_on": "the entries this one would not survive without — its grounds. Not decoration: `unsupported(self, 'rests_on')` counts the targets that have been superseded or deleted, and the rule below goes red while any of them has. This is the edge a flat ledger writes as prose ('the speed-up above is only sound because of it'), where nothing can act on it and a reader has to hold the whole list in mind to notice that the ground moved."
+      },
+      "operations": {}
+    },
+    {
+      "kind": "discharge",
+      "description": "The condition under which a debt is cleared — who must do what, and by when. A debt without one is not a debt, it is a permanent defect that has been dressed up as a plan. Its text is frozen like everything else: it says what must be done, not what was. The act of paying is grounding the debt's params, and the trace of payment — who checked, when — goes in the param's provenance `source`, which the roll deliberately does not digest. Recording a payment never requires rewriting a word.",
+      "params": {},
+      "links": {},
+      "operations": {}
+    },
+    {
+      "kind": "gate",
+      "description": "A point past which unsound things must not travel: a release, a publication, a cut, a trade. It links `admits` at whatever it lets through, and the rule below counts the ungrounded params on the other end. A gate is the only place a ledger stops being a record and starts being a brake.",
+      "params": {},
+      "links": {
+        "admits": "the nodes this gate lets through — each must be sound"
+      },
+      "operations": {}
+    },
+    {
+      "kind": "retraction",
+      "description": "The only sanctioned way an entry leaves the ledger, and it is narrow on purpose: for something that was never a valid entry — a positioning statement filed as a hypothesis, a mood filed as a debt. NOT for an entry that was reversed or stated something false (that is `supersedes`, and the old entry stays), and NOT for a debt that was paid (that is `discharge`, and the debt stays grounded). Both of those keep the node, because the record of having been wrong is the part with the value in it. A retraction says only: this was never the kind of thing that belonged here. It carries a tombstone per entry buried, and those tombstones are what a roll check reads to tell a considered removal from a quiet one.",
+      "params": {},
+      "links": {},
+      "operations": {}
+    },
+    {
+      "kind": "tombstone",
+      "description": "One buried entry: `payload.was` is the path it stood at, and `payload.why` is why it left — never valid (under a retraction) or finished (under a compaction). The path matters more than it looks — a removal check compares the tree against the roll committed beside it, and matches what vanished against these. A tombstone with no `was` excuses nothing, which is the right way round: forgetting it leaves the check red, never green.",
+      "params": {},
+      "links": {},
+      "operations": {}
+    },
+    {
+      "kind": "compaction",
+      "description": "The recorded shrink. `retraction` removes what never belonged; a compaction removes what is FINISHED — a superseded chain nothing rests on any more, a settled argument whose text is history rather than working set. Same shape as a retraction: one tombstone per entry buried, `was` carrying the path. Nothing is lost — git keeps the prose, the roll kept its digest, the tombstone keeps the address — but the working set stays the size of what still binds, which is the whole economics of keeping a ledger. Compacting something still load-bearing is caught without new machinery: whatever rests on it goes red (`unsupported` counts absence), and a gate admitting it trips on the dangling link. A later compaction may bury an earlier one's tombstones: the record shrinks in generations, never silently.",
+      "params": {},
+      "links": {},
+      "operations": {}
+    }
+  ],
+  "rules": [
+    {
+      "name": "a-decision-names-what-it-rejected",
+      "expr": "len(nodes('alternative', self)) >= 1",
+      "description": "A choice with no stated alternative is indistinguishable from an accident, and cannot be re-examined — there is nothing to re-examine it against.",
+      "kind": "decision"
+    },
+    {
+      "name": "a-hypothesis-is-falsifiable",
+      "expr": "len(nodes('falsification', self)) >= 1",
+      "description": "A belief that cannot be killed by any observation is not being tested by the project; it is being assumed by it.",
+      "kind": "hypothesis"
+    },
+    {
+      "name": "a-debt-states-how-it-is-discharged",
+      "expr": "len(nodes('discharge', self)) >= 1",
+      "description": "An unsound thing carried with no discharge condition is not debt, it is decay. The condition is what lets anyone else finish it.",
+      "kind": "debt"
+    },
+    {
+      "name": "nothing-unsound-passes-a-gate",
+      "expr": "solve('grounding/untrusted_via', self, 'admits') == 0",
+      "description": "The load-bearing one. Whatever this gate admits must rest on observations, not on guesses: no ungrounded param may travel through it. This is the rule that turns a written-down caveat into a thing that stops a release.",
+      "kind": "gate"
+    },
+    {
+      "name": "what-a-decision-rests-on-still-stands",
+      "expr": "unsupported(self, 'rests_on') == 0",
+      "description": "A decision taken because of an earlier one does not survive that one being reversed — it becomes a choice nobody would make again, still on the books, indistinguishable from a choice still held. This is the rule that makes the standing requirement mechanical: a decision whose stated rationale no longer holds should be discoverable by a rule, not by memory.",
+      "kind": "decision"
+    },
+    {
+      "name": "what-a-hypothesis-rests-on-still-stands",
+      "expr": "unsupported(self, 'rests_on') == 0",
+      "description": "A belief can stop being worth holding without ever being tested: reverse the decision it was about and its falsification condition can no longer be observed at all. A hypothesis about a mechanism that no longer exists is not open, it is moot, and nothing in a flat ledger can tell them apart.",
+      "kind": "hypothesis"
+    },
+    {
+      "name": "what-a-debt-rests-on-still-stands",
+      "expr": "unsupported(self, 'rests_on') == 0",
+      "description": "A debt is the price of a decision. Reverse the decision and the price is either no longer owed or owed for a different reason — and either way the discharge condition beneath it was written against a world that is gone.",
+      "kind": "debt"
+    },
+    {
+      "name": "a-retraction-names-what-it-buried",
+      "expr": "len(nodes('tombstone', self)) >= 1",
+      "description": "A retraction with no tombstone is a deletion with a note attached, which is the thing it exists to replace. Each buried entry gets its own, so what left the ledger is as legible as what stayed in it.",
+      "kind": "retraction"
+    },
+    {
+      "name": "a-compaction-names-what-it-buried",
+      "expr": "len(nodes('tombstone', self)) >= 1",
+      "description": "Same contract as a retraction, for the other exit: shrinking the working set without tombstones is deletion with extra steps, and the roll treats it as exactly that.",
+      "kind": "compaction"
+    },
+    {
+      "name": "a-decision-fits-its-reader",
+      "expr": "superseded(self) or said_words(self) <= 600",
+      "description": "An entry is read many times and written once; every word is a recurring cost, and past ~600 for the whole argument it stops being read at all — which is worse than absent. Over budget is a debt: tighten the words (an edit, acknowledged in meta.amended), split the entry, or supersede it with the version that says less. It is always better to edit than to add.",
+      "kind": "decision"
+    },
+    {
+      "name": "a-hypothesis-fits-its-reader",
+      "expr": "superseded(self) or said_words(self) <= 600",
+      "description": "Same budget as a decision, same reason - and a belief that takes more than 600 words to state is usually several beliefs, each easier to falsify alone.",
+      "kind": "hypothesis"
+    },
+    {
+      "name": "a-debt-fits-its-reader",
+      "expr": "superseded(self) or said_words(self) <= 600",
+      "description": "Same budget as a decision, same reason - and a debt is the entry a future reader most needs to act on quickly, which is the last place an essay belongs.",
+      "kind": "debt"
+    }
+  ],
+  "solvers": [],
+  "examples": [
+    {
+      "id": "chose-strict-validation",
+      "kind": "decision",
+      "name": "Validate every translation bundle against the reference bundle, key for key",
+      "params": {},
+      "links": {},
+      "meta": {},
+      "payload": {
+        "rationale": "A bundle silently missing a key ships a blank string to a reader who cannot tell us, in a language we cannot read.",
+        "consequence": "Every copy change becomes an all-bundles change. That cost is real and was accepted with open eyes; it is recorded here so the next person meets it as a decision, not a surprise."
+      },
+      "children": [
+        {
+          "id": "fall-back-to-reference",
+          "kind": "alternative",
+          "name": "Fall back to the reference bundle for a missing key",
+          "params": {},
+          "links": {},
+          "meta": {},
+          "payload": {
+            "why": "Cheaper per edit, but a visible fallback in the wrong language is a bug a reader reports; an invisible one is a bug nobody ever reports. Rejected — for now: if the edit cost bites, this is the first thing to revisit."
+          },
+          "children": []
+        }
+      ]
+    },
+    {
+      "id": "machine-check-runs-on-every-edit",
+      "kind": "decision",
+      "name": "Run the key-for-key check in CI, on every commit that touches copy",
+      "params": {},
+      "links": {
+        "rests_on": [
+          "chose-strict-validation"
+        ]
+      },
+      "meta": {},
+      "payload": {
+        "rationale": "Strict validation is only worth its cost if it is enforced where the cost is paid — at the edit — rather than discovered at release, when the edit is a week old and someone else's."
+      },
+      "children": [
+        {
+          "id": "check-at-release",
+          "kind": "alternative",
+          "name": "Run the check once, at release",
+          "params": {},
+          "links": {},
+          "meta": {},
+          "payload": {
+            "why": "Same coverage, later signal. A missing key found at release blocks the release; found at the edit it is a typo. Rejected: the check is cheap enough that batching it buys nothing but distance."
+          },
+          "children": []
+        }
+      ]
+    },
+    {
+      "id": "bundles-are-good-enough",
+      "kind": "hypothesis",
+      "name": "The generated bundles are good enough to publish unreviewed",
+      "params": {},
+      "links": {
+        "rests_on": [
+          "chose-strict-validation"
+        ]
+      },
+      "meta": {},
+      "payload": {
+        "held_because": "spot checks in the two languages we can read looked fine"
+      },
+      "children": [
+        {
+          "id": "a-reader-reports-nonsense",
+          "kind": "falsification",
+          "name": "A reader of that language reports the copy as wrong or unidiomatic",
+          "params": {},
+          "links": {},
+          "meta": {},
+          "payload": {
+            "claim": "One credible report of broken copy in any generated bundle falsifies this and the bundles must be read.",
+            "cadence": "on-report"
+          },
+          "children": []
+        }
+      ]
+    },
+    {
+      "id": "reviewed-bundle",
+      "kind": "debt",
+      "name": "A bundle that WAS generated unchecked, and has since been read",
+      "params": {
+        "strings": {
+          "value": 47.0,
+          "unit": "string",
+          "provenance": "verified",
+          "grounded": true,
+          "source": "checked by a reader of that language, 2026-07",
+          "derived_from": []
+        }
+      },
+      "links": {
+        "rests_on": [
+          "chose-strict-validation"
+        ]
+      },
+      "meta": {},
+      "payload": {},
+      "children": [
+        {
+          "id": "read-it",
+          "kind": "discharge",
+          "name": "Someone who reads the language checks every string",
+          "params": {},
+          "links": {},
+          "meta": {},
+          "payload": {
+            "who": "any competent reader of it"
+          },
+          "children": []
+        }
+      ]
+    },
+    {
+      "id": "count-taken-from-the-generator-log",
+      "kind": "debt",
+      "name": "Strings shipped unread, counted from the generator's log",
+      "params": {
+        "strings": {
+          "value": 47.0,
+          "unit": "string",
+          "provenance": "unverified",
+          "grounded": false,
+          "source": "the generator log",
+          "derived_from": []
+        }
+      },
+      "links": {
+        "rests_on": [
+          "chose-strict-validation"
+        ]
+      },
+      "meta": {},
+      "payload": {
+        "premise": "every generated bundle appears in the log, so the log's count is the whole exposure"
+      },
+      "children": [
+        {
+          "id": "count-the-log",
+          "kind": "discharge",
+          "name": "Count the unread strings in the generator log",
+          "params": {},
+          "links": {},
+          "meta": {},
+          "payload": {
+            "who": "anyone who can read the log"
+          },
+          "children": []
+        }
+      ]
+    },
+    {
+      "id": "count-taken-where-bundles-ship",
+      "kind": "debt",
+      "name": "Strings shipped unread, counted at publication — the log held failures only",
+      "params": {
+        "strings": {
+          "value": 52.0,
+          "unit": "string",
+          "provenance": "unverified",
+          "grounded": false,
+          "source": "counted at publication",
+          "derived_from": []
+        }
+      },
+      "links": {
+        "supersedes": [
+          "count-taken-from-the-generator-log"
+        ],
+        "rests_on": [
+          "chose-strict-validation"
+        ]
+      },
+      "meta": {},
+      "payload": {
+        "correction": "the log recorded generation failures, so counting it counted the wrong thing; the count now happens where bundles actually ship"
+      },
+      "children": [
+        {
+          "id": "read-what-shipped",
+          "kind": "discharge",
+          "name": "Someone who reads the language checks every shipped string",
+          "params": {},
+          "links": {},
+          "meta": {},
+          "payload": {
+            "who": "any competent reader of it"
+          },
+          "children": []
+        }
+      ]
+    },
+    {
+      "id": "release",
+      "kind": "gate",
+      "name": "Publication: nothing unsound reaches a reader",
+      "params": {},
+      "links": {
+        "admits": [
+          "reviewed-bundle"
+        ]
+      },
+      "meta": {},
+      "payload": {},
+      "children": []
+    },
+    {
+      "id": "the-cache-argument-is-history",
+      "kind": "compaction",
+      "name": "The cache-parse chain leaves the working set: superseded, settled, done",
+      "params": {},
+      "links": {},
+      "meta": {},
+      "payload": {
+        "why": "Both cache decisions were superseded and nothing rests on them any more; the argument is settled, and a settled argument in the working set is a tax on every future reader. git keeps the prose, the roll kept the digests, these keep the addresses."
+      },
+      "children": [
+        {
+          "id": "tombstone-cache-the-parse",
+          "kind": "tombstone",
+          "name": "'Parse each bundle once and cache it' — concluded",
+          "params": {},
+          "links": {},
+          "meta": {},
+          "payload": {
+            "was": "cache-the-parse",
+            "why": "superseded by parse-every-time, which nothing disputes and everything that cared has re-aimed at"
+          },
+          "children": []
+        }
+      ]
+    },
+    {
+      "id": "entries-that-were-never-entries",
+      "kind": "retraction",
+      "name": "Filed as ledger entries, but not the kind of thing a ledger holds",
+      "params": {},
+      "links": {},
+      "meta": {},
+      "payload": {
+        "why": "Both were opinions about how the work should look, wearing the grammar of a claim. Neither could be superseded (nothing replaced them) or discharged (nothing was owed), so leaving them in would have meant carrying two entries no rule could ever act on — and quietly deleting them would have left the removal check red with no way to say why."
+      },
+      "children": [
+        {
+          "id": "tombstone-tidy-copy",
+          "kind": "tombstone",
+          "name": "'The copy should read well' — filed as a hypothesis",
+          "params": {},
+          "links": {},
+          "meta": {},
+          "payload": {
+            "was": "the-copy-should-read-well",
+            "why": "A preference, not a belief: no observation could have killed it, and the falsification child written under it restated the preference in the future tense."
+          },
+          "children": []
+        }
+      ]
+    }
+  ],
+  "counter_examples": [
+    {
+      "rule": "a-decision-names-what-it-rejected",
+      "nodes": [
+        {
+          "id": "just-did-it",
+          "kind": "decision",
+          "name": "We went with the obvious thing",
+          "params": {},
+          "links": {},
+          "meta": {},
+          "payload": {
+            "rationale": "it seemed right at the time"
+          },
+          "children": []
+        }
+      ],
+      "because": "a choice with no rejected alternative"
+    },
+    {
+      "rule": "a-hypothesis-is-falsifiable",
+      "nodes": [
+        {
+          "id": "it-will-be-fine",
+          "kind": "hypothesis",
+          "name": "It will probably be fine",
+          "params": {},
+          "links": {},
+          "meta": {},
+          "payload": {},
+          "children": []
+        }
+      ],
+      "because": "a belief nothing could disprove"
+    },
+    {
+      "rule": "a-debt-states-how-it-is-discharged",
+      "nodes": [
+        {
+          "id": "fix-later",
+          "kind": "debt",
+          "name": "We'll clean this up at some point",
+          "params": {
+            "strings": {
+              "value": 47.0,
+              "unit": "string",
+              "provenance": "unverified",
+              "grounded": false,
+              "source": "generator",
+              "derived_from": []
+            }
+          },
+          "links": {},
+          "meta": {},
+          "payload": {},
+          "children": []
+        }
+      ],
+      "because": "an unsound thing carried with no way to finish it"
+    },
+    {
+      "rule": "nothing-unsound-passes-a-gate",
+      "nodes": [
+        {
+          "id": "unread-bundle",
+          "kind": "debt",
+          "name": "A machine-generated bundle nobody has read",
+          "params": {
+            "strings": {
+              "value": 47.0,
+              "unit": "string",
+              "provenance": "unverified",
+              "grounded": false,
+              "source": "generator",
+              "derived_from": []
+            }
+          },
+          "links": {},
+          "meta": {},
+          "payload": {},
+          "children": [
+            {
+              "id": "read-it",
+              "kind": "discharge",
+              "name": "Someone who reads the language checks every string",
+              "params": {},
+              "links": {},
+              "meta": {},
+              "payload": {
+                "who": "any competent reader of it"
+              },
+              "children": []
+            }
+          ]
+        },
+        {
+          "id": "release",
+          "kind": "gate",
+          "name": "Publication",
+          "params": {},
+          "links": {
+            "admits": [
+              "unread-bundle"
+            ]
+          },
+          "meta": {},
+          "payload": {},
+          "children": []
+        }
+      ],
+      "because": "a release that publishes a value nobody ever checked"
+    },
+    {
+      "rule": "what-a-decision-rests-on-still-stands",
+      "nodes": [
+        {
+          "id": "cache-the-parse",
+          "kind": "decision",
+          "name": "Parse each bundle once and cache it",
+          "params": {},
+          "links": {},
+          "meta": {},
+          "payload": {},
+          "children": [
+            {
+              "id": "alt-parse-per-request",
+              "kind": "alternative",
+              "name": "Parse on every request",
+              "params": {},
+              "links": {},
+              "meta": {},
+              "payload": {
+                "why": "simpler, and too slow"
+              },
+              "children": []
+            }
+          ]
+        },
+        {
+          "id": "parse-every-time",
+          "kind": "decision",
+          "name": "Parse on every request after all — the cache went stale in prod",
+          "params": {},
+          "links": {
+            "supersedes": [
+              "cache-the-parse"
+            ]
+          },
+          "meta": {},
+          "payload": {},
+          "children": [
+            {
+              "id": "alt-keep-the-cache",
+              "kind": "alternative",
+              "name": "Keep the cache and invalidate harder",
+              "params": {},
+              "links": {},
+              "meta": {},
+              "payload": {
+                "why": "two bugs deep already"
+              },
+              "children": []
+            }
+          ]
+        },
+        {
+          "id": "invalidate-on-write",
+          "kind": "decision",
+          "name": "Invalidate the bundle cache whenever copy is written",
+          "params": {},
+          "links": {
+            "rests_on": [
+              "cache-the-parse"
+            ]
+          },
+          "meta": {},
+          "payload": {},
+          "children": [
+            {
+              "id": "alt-ttl",
+              "kind": "alternative",
+              "name": "A short TTL",
+              "params": {},
+              "links": {},
+              "meta": {},
+              "payload": {
+                "why": "wrong copy for the length of the TTL"
+              },
+              "children": []
+            }
+          ]
+        }
+      ],
+      "because": "a decision still on the books whose whole reason was reversed"
+    },
+    {
+      "rule": "what-a-decision-rests-on-still-stands",
+      "nodes": [
+        {
+          "id": "invalidate-on-write",
+          "kind": "decision",
+          "name": "Invalidate the bundle cache whenever copy is written",
+          "params": {},
+          "links": {
+            "rests_on": [
+              "cache-the-parse"
+            ]
+          },
+          "meta": {},
+          "payload": {},
+          "children": [
+            {
+              "id": "alt-ttl",
+              "kind": "alternative",
+              "name": "A short TTL",
+              "params": {},
+              "links": {},
+              "meta": {},
+              "payload": {
+                "why": "wrong copy for the length of the TTL"
+              },
+              "children": []
+            }
+          ]
+        }
+      ],
+      "because": "a decision resting on an entry that was deleted out from under it"
+    },
+    {
+      "rule": "what-a-hypothesis-rests-on-still-stands",
+      "nodes": [
+        {
+          "id": "cache-the-parse",
+          "kind": "decision",
+          "name": "Parse each bundle once and cache it",
+          "params": {},
+          "links": {},
+          "meta": {},
+          "payload": {},
+          "children": [
+            {
+              "id": "alt-parse-per-request",
+              "kind": "alternative",
+              "name": "Parse on every request",
+              "params": {},
+              "links": {},
+              "meta": {},
+              "payload": {
+                "why": "simpler, and too slow"
+              },
+              "children": []
+            }
+          ]
+        },
+        {
+          "id": "parse-every-time",
+          "kind": "decision",
+          "name": "Parse on every request after all",
+          "params": {},
+          "links": {
+            "supersedes": [
+              "cache-the-parse"
+            ]
+          },
+          "meta": {},
+          "payload": {},
+          "children": [
+            {
+              "id": "alt-keep-the-cache",
+              "kind": "alternative",
+              "name": "Keep the cache and invalidate harder",
+              "params": {},
+              "links": {},
+              "meta": {},
+              "payload": {
+                "why": "two bugs deep already"
+              },
+              "children": []
+            }
+          ]
+        },
+        {
+          "id": "the-cache-never-goes-stale",
+          "kind": "hypothesis",
+          "name": "The bundle cache is never read after copy changed",
+          "params": {},
+          "links": {
+            "rests_on": [
+              "cache-the-parse"
+            ]
+          },
+          "meta": {},
+          "payload": {},
+          "children": [
+            {
+              "id": "a-reader-sees-old-copy",
+              "kind": "falsification",
+              "name": "A reader is served a string that was edited",
+              "params": {},
+              "links": {},
+              "meta": {},
+              "payload": {
+                "claim": "One sighting falsifies it.",
+                "cadence": "on-report"
+              },
+              "children": []
+            }
+          ]
+        }
+      ],
+      "because": "a belief about a mechanism that no longer exists — moot, not open"
+    },
+    {
+      "rule": "what-a-debt-rests-on-still-stands",
+      "nodes": [
+        {
+          "id": "cache-the-parse",
+          "kind": "decision",
+          "name": "Parse each bundle once and cache it",
+          "params": {},
+          "links": {},
+          "meta": {},
+          "payload": {},
+          "children": [
+            {
+              "id": "alt-parse-per-request",
+              "kind": "alternative",
+              "name": "Parse on every request",
+              "params": {},
+              "links": {},
+              "meta": {},
+              "payload": {
+                "why": "simpler, and too slow"
+              },
+              "children": []
+            }
+          ]
+        },
+        {
+          "id": "parse-every-time",
+          "kind": "decision",
+          "name": "Parse on every request after all",
+          "params": {},
+          "links": {
+            "supersedes": [
+              "cache-the-parse"
+            ]
+          },
+          "meta": {},
+          "payload": {},
+          "children": [
+            {
+              "id": "alt-keep-the-cache",
+              "kind": "alternative",
+              "name": "Keep the cache and invalidate harder",
+              "params": {},
+              "links": {},
+              "meta": {},
+              "payload": {
+                "why": "two bugs deep already"
+              },
+              "children": []
+            }
+          ]
+        },
+        {
+          "id": "cache-size-is-a-guess",
+          "kind": "debt",
+          "name": "The cache is sized by a number nobody measured",
+          "params": {
+            "entries": {
+              "value": 512.0,
+              "unit": "entry",
+              "provenance": "unverified",
+              "grounded": false,
+              "source": "picked in review",
+              "derived_from": []
+            }
+          },
+          "links": {
+            "rests_on": [
+              "cache-the-parse"
+            ]
+          },
+          "meta": {},
+          "payload": {},
+          "children": [
+            {
+              "id": "measure-it",
+              "kind": "discharge",
+              "name": "Measure the working set under real traffic",
+              "params": {},
+              "links": {},
+              "meta": {},
+              "payload": {
+                "who": "whoever next touches the cache"
+              },
+              "children": []
+            }
+          ]
+        }
+      ],
+      "because": "a price still recorded as owed for a decision nobody took in the end"
+    },
+    {
+      "rule": "a-retraction-names-what-it-buried",
+      "nodes": [
+        {
+          "id": "tidied-up",
+          "kind": "retraction",
+          "name": "Removed some entries that were not pulling their weight",
+          "params": {},
+          "links": {},
+          "meta": {},
+          "payload": {
+            "why": "they were noise"
+          },
+          "children": []
+        }
+      ],
+      "because": "a deletion with a note attached, which is what a retraction replaces"
+    },
+    {
+      "rule": "a-compaction-names-what-it-buried",
+      "nodes": [
+        {
+          "id": "slimmed-down",
+          "kind": "compaction",
+          "name": "Moved the old stuff out",
+          "params": {},
+          "links": {},
+          "meta": {},
+          "payload": {
+            "why": "it was getting long"
+          },
+          "children": []
+        }
+      ],
+      "because": "a shrink that names nothing, which is deletion with extra steps"
+    },
+    {
+      "rule": "a-decision-fits-its-reader",
+      "nodes": [
+        {
+          "id": "an-essay-filed-as-a-decision",
+          "kind": "decision",
+          "name": "A record that has become a publication",
+          "params": {},
+          "links": {},
+          "meta": {},
+          "payload": {
+            "body": "over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over "
+          },
+          "children": []
+        }
+      ],
+      "because": "an entry priced past what any reader will pay"
+    },
+    {
+      "rule": "a-hypothesis-fits-its-reader",
+      "nodes": [
+        {
+          "id": "an-essay-filed-as-a-hypothesis",
+          "kind": "hypothesis",
+          "name": "A record that has become a publication",
+          "params": {},
+          "links": {},
+          "meta": {},
+          "payload": {
+            "body": "over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over "
+          },
+          "children": []
+        }
+      ],
+      "because": "an entry priced past what any reader will pay"
+    },
+    {
+      "rule": "a-debt-fits-its-reader",
+      "nodes": [
+        {
+          "id": "an-essay-filed-as-a-debt",
+          "kind": "debt",
+          "name": "A record that has become a publication",
+          "params": {},
+          "links": {},
+          "meta": {},
+          "payload": {
+            "body": "over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over over "
+          },
+          "children": []
+        }
+      ],
+      "because": "an entry priced past what any reader will pay"
+    }
+  ]
+}
