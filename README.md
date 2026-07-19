@@ -102,9 +102,18 @@ uv sync --extra tray
 
 Launch it through that entry point, not `pythonw -m transponder.tray`: a uv venv's `pythonw.exe`
 is a console-subsystem trampoline, so `-m` gives the tray a console window — and closing that
-window kills the icon. `transponder-tray.exe` is a `gui-scripts` entry point, so it is windowless.
-For autostart, put a shortcut to it in `shell:startup`. Windows 11 files new tray icons in the
-hidden overflow: promote it once by dragging it onto the taskbar.
+window kills the icon. `transponder-tray.exe` is a `gui-scripts` entry point, so the launcher
+itself is windowless — but it delegates to that same venv `pythonw.exe` (uv 0.11.26 still builds
+it console-subsystem), so launched bare at login it parks a black console on the screen whose
+close button kills the icon anyway. The shipped launcher hides the whole chain:
+
+```
+wscript.exe //B "<checkout>\transponder\tray.vbs"
+```
+
+Put a shortcut with that target in `shell:startup` — wscript is a GUI-subsystem host, so nothing
+in the chain ever owns a window a hand can close. Windows 11 files new tray icons in the hidden
+overflow: promote it once by dragging it onto the taskbar.
 
 ## Environment
 
