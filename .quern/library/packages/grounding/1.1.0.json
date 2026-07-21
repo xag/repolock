@@ -1,0 +1,67 @@
+{
+  "name": "grounding",
+  "version": "1.1.0",
+  "description": "Contracts over the provenance atom, so a rule can ask whether a number is safe to act on: untrusted(path, tol) counts the params that are not grounded (or grounded too loosely); untrusted_via(path, rel, tol) asks it of whatever a node links to — the reality a design is fitted against; depends_untrusted(path, tol) follows derived_from lineage, because a computed value is only as good as its inputs. Grounding is the substrate's one fixed epistemic verb; the provenance *label* stays a domain's own word.",
+  "publisher": "standard library",
+  "requires": [],
+  "vocabulary": [
+    {
+      "kind": "grounding",
+      "description": "Convention pack, not a node kind: every Quantity already carries `grounded` and `tolerance`. These contracts only read them — count what a branch, its links, or its lineage rests on that is not an observation.",
+      "params": {},
+      "links": {},
+      "operations": {}
+    }
+  ],
+  "rules": [],
+  "solvers": [
+    {
+      "name": "grounding/untrusted",
+      "description": "Counts the params at or under a path that are not safe to act on — not grounded, or grounded looser than the tolerance asked for. The direct question: is anything in this branch a guess? A rule wants `== 0`; a diagnostic reads the count.",
+      "blob": "",
+      "medium": "wasm",
+      "native": true,
+      "reads": [
+        ""
+      ],
+      "params_doc": {
+        "path": "branch to inspect, itself and everything under it (default: the root)",
+        "tolerance": "the loosest grounding that still counts as safe; omit to ask only whether a value is grounded at all, ignoring how tight"
+      },
+      "fuel": 500000000
+    },
+    {
+      "name": "grounding/untrusted_via",
+      "description": "The same question asked of the reality a node is fitted against: follows one hop of a named link and counts the untrusted params in what it points to. This is the gate a design passes before it is acted on — the link says what the design depends on, this says whether those dependencies are observations or guesses.",
+      "blob": "",
+      "medium": "wasm",
+      "native": true,
+      "reads": [
+        ""
+      ],
+      "params_doc": {
+        "path": "the node whose link is followed",
+        "rel": "the link name to follow one hop (e.g. 'fits_against', 'admits')",
+        "tolerance": "the loosest grounding that still counts as safe; omit to ask only about grounding, not tightness"
+      },
+      "fuel": 500000000
+    },
+    {
+      "name": "grounding/depends_untrusted",
+      "description": "Follows `derived_from` lineage transitively and counts the upstream params that are untrusted. A derived value is never grounded on its own — it is exactly as good as its inputs, and this is what prices that: a computed number resting on a guess is a guess wearing a number's clothes. A diamond in the lineage counts once.",
+      "blob": "",
+      "medium": "wasm",
+      "native": true,
+      "reads": [
+        ""
+      ],
+      "params_doc": {
+        "path": "branch whose params' lineage is followed (default: the root)",
+        "tolerance": "the loosest grounding that still counts as safe upstream; omit to ask only about grounding"
+      },
+      "fuel": 500000000
+    }
+  ],
+  "examples": [],
+  "counter_examples": []
+}
