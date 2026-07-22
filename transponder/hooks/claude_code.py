@@ -68,8 +68,42 @@ def _deny(reason: str) -> None:
     sys.exit(2)
 
 
+# The courier's notes, buffered until the end of the call. ONE JSON document goes to stdout, so
+# they cannot be printed as they are produced: two objects on stdout do not parse as one.
+_NOTES: list[str] = []
+
+
 def _say(msg: str) -> None:
-    print(msg)
+    """Queue a note for the agent. It is NOT printed.
+
+    Plain stdout on PreToolUse/PostToolUse/Stop goes to Claude Code's DEBUG LOG — not the model,
+    not even the transcript. This was `print(msg)` for the whole life of v2, which means the
+    courier has been talking to a log file: no agent on this machine has ever received the
+    shared-checkout intro, a heads-up, or a violation report. It was not a delivery that
+    degraded — it never arrived, and nothing in the library could tell, because a hook's stdout
+    looks identical whether someone reads it or not.
+
+    `hookSpecificOutput.additionalContext` is the channel that reaches the model without blocking
+    the call, which keeps the one rule this library will not break: nothing is ever refused.
+
+    Its TIMING is not what heads_up() was written for, and that is a real cost, not a footnote.
+    Context from PreToolUse is delivered next to the TOOL RESULT — after the write has landed. No
+    non-blocking pre-execution channel exists in this harness; the only thing that reaches a model
+    before its tool runs is exit 2, which refuses the call. So the pre-write warning is now a
+    prompt after-the-fact report, and whether heads_up() should still exist as a distinct thing is
+    a design question this change deliberately does not settle.
+    """
+    _NOTES.append(msg)
+
+
+def _emit(event: str) -> None:
+    """Hand the queued notes to the model. Silence when there is nothing to say — an information
+    layer that speaks on every call teaches its reader to skim."""
+    if not _NOTES:
+        return
+    json.dump({"hookSpecificOutput": {"hookEventName": event,
+                                      "additionalContext": "\n\n".join(_NOTES)}}, sys.stdout)
+    sys.stdout.write("\n")
 
 
 def _record() -> None:
@@ -309,21 +343,25 @@ def main() -> None:
     except (json.JSONDecodeError, ValueError):
         sys.exit(0)                       # a hook that cannot parse its input must not block work
 
-    handler = HANDLERS.get(payload.get("hook_event_name") or "")
+    event = payload.get("hook_event_name") or ""
+    handler = HANDLERS.get(event)
     if not handler:
         sys.exit(0)
 
     try:
         handler(payload)
     except SystemExit:
-        raise
+        raise                             # the Stop deny: exit 2 carries its reason on stderr
     except Exception as e:                # noqa: BLE001
         # A crashing hook must never wedge a session. Fail SILENT-to-the-flow, loud-to-the-eye:
         # the courier losing a note is an inconvenience; a hook error blocking work would be the
-        # lock's old disease wearing the informer's coat.
+        # lock's old disease wearing the informer's coat. Notes already queued still go out — a
+        # half-delivered warning beats a swallowed one.
         print(f"transponder hook error ({type(e).__name__}: {e}) — this call went unwitnessed",
               file=sys.stderr)
+        _emit(event)
         sys.exit(0)
+    _emit(event)
 
 
 if __name__ == "__main__":
