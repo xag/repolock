@@ -1,5 +1,25 @@
 [
   {
+    "path": "a-channel-they-can-repurpose",
+    "kind": "decision",
+    "digest": "9500c25c44df"
+  },
+  {
+    "path": "a-channel-they-can-repurpose/alt-no-channel-file-an-issue",
+    "kind": "alternative",
+    "digest": "49f62b20b239"
+  },
+  {
+    "path": "a-channel-they-can-repurpose/alt-push-everything",
+    "kind": "alternative",
+    "digest": "75ef28fc5d81"
+  },
+  {
+    "path": "a-channel-they-can-repurpose/alt-structured-negotiation-protocol",
+    "kind": "alternative",
+    "digest": "22daa2f60059"
+  },
+  {
     "path": "a-refusal-must-be-actionable",
     "kind": "decision",
     "digest": "e7013b6fbc44"
@@ -345,6 +365,26 @@
     "digest": "bdc7966716bf"
   },
   {
+    "path": "tell-both-parties",
+    "kind": "decision",
+    "digest": "417a1e243305"
+  },
+  {
+    "path": "tell-both-parties/alt-mirror-one-message-to-both",
+    "kind": "alternative",
+    "digest": "8629e8f9ea70"
+  },
+  {
+    "path": "tell-both-parties/alt-offender-restores-it",
+    "kind": "alternative",
+    "digest": "2478961cd2b2"
+  },
+  {
+    "path": "tell-both-parties/alt-wake-the-victim",
+    "kind": "alternative",
+    "digest": "a5aa0c285c54"
+  },
+  {
     "path": "the-background-task-cannot-be-observed",
     "kind": "decision",
     "digest": "92cd593002bf"
@@ -358,6 +398,26 @@
     "path": "the-background-task-cannot-be-observed/alt-wait-for-the-task-to-exit",
     "kind": "alternative",
     "digest": "9ceaf473924d"
+  },
+  {
+    "path": "the-courier-speaks-where-it-can-be-heard",
+    "kind": "decision",
+    "digest": "bdaf355468b3"
+  },
+  {
+    "path": "the-courier-speaks-where-it-can-be-heard/alt-exit-2-to-reach-the-model",
+    "kind": "alternative",
+    "digest": "fecd35bb3c92"
+  },
+  {
+    "path": "the-courier-speaks-where-it-can-be-heard/alt-keep-printing-to-stdout",
+    "kind": "alternative",
+    "digest": "25d7991ed1b3"
+  },
+  {
+    "path": "the-courier-speaks-where-it-can-be-heard/alt-permission-decision-reason",
+    "kind": "alternative",
+    "digest": "7395b454c2aa"
   },
   {
     "path": "the-off-switch-cannot-need-a-shell",
@@ -388,6 +448,21 @@
     "path": "the-ticket-must-survive-the-shell/alt-ship-a-launcher-script",
     "kind": "alternative",
     "digest": "943f59437c82"
+  },
+  {
+    "path": "there-is-no-warning-before-a-write",
+    "kind": "decision",
+    "digest": "270676340d76"
+  },
+  {
+    "path": "there-is-no-warning-before-a-write/alt-block-just-this-one-case",
+    "kind": "alternative",
+    "digest": "ad64f6842523"
+  },
+  {
+    "path": "there-is-no-warning-before-a-write/alt-reword-the-heads-up",
+    "kind": "alternative",
+    "digest": "392cabccf8bb"
   },
   {
     "path": "tray-is-a-face-not-an-authority",

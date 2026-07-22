@@ -473,6 +473,12 @@ DECISIONS = [
                                   "corruption into a named collision, which is the whole difference"}),
          ]),
 
+    # ITS PREMISE WAS FALSE WHEN IT WAS WRITTEN, and the text below is left standing so that stays
+    # visible. "The hook prints into every agent's context on every tool call" was the sentence the
+    # mutex was deleted on; hook stdout went to a debug log, and no agent had ever received a note.
+    # The conclusion survives — a two-session run on 2026-07-22 confirmed agents cooperate when told
+    # — but it was reached on a mechanism that did not exist and was only made real that day. The
+    # correction, and the rule that follows from it, are in the-courier-speaks-where-it-can-be-heard.
     Node(id="information-not-exclusion", kind="decision",
          meta={"amended": "9b985b966e26 tightened under the 600-word budget; every claim kept"},
          name="Scratch the mutex entirely: nothing is ever refused, and information is the model",
@@ -707,6 +713,212 @@ DECISIONS = [
                                   "`scopes()` exists to answer truthfully. A map that is confidently "
                                   "out of date is the same cardinal sin as a map that is confidently "
                                   "wrong — see tray-is-a-face-not-an-authority"}),
+         ]),
+
+    Node(id="the-courier-speaks-where-it-can-be-heard", kind="decision",
+         name="Notes go out as hookSpecificOutput.additionalContext — and a channel is verified at "
+              "the RECEIVING end or not at all",
+         payload={"rationale":
+                  "`_say()` was `print(msg)` for the whole life of v2. Plain stdout from "
+                  "PreToolUse/PostToolUse/Stop goes to Claude Code's DEBUG LOG — not the model, not "
+                  "the transcript. So no agent on this machine had ever received the "
+                  "shared-checkout intro, a heads-up, or a violation report. THE COURIER HAD NEVER "
+                  "SPOKEN TO ANYONE.\n\n"
+                  "Nothing internal could tell. The map was accurate, the witness was watching, the "
+                  "tapes were faithful, every test was green — and the tape recorded each note "
+                  "being PRODUCED, which is not the same fact as delivered. It took two sessions "
+                  "deliberately colliding to notice, because the failure is invisible from inside "
+                  "one session, which is the exact blindness this project exists to cure, turned on "
+                  "itself.\n\n"
+                  "The fix is small: emit one JSON document carrying "
+                  "`hookSpecificOutput.additionalContext`, which reaches the model without refusing "
+                  "the call. Buffered, because two JSON objects on stdout do not parse as one and "
+                  "several notes can fire on a call.\n\n"
+                  "The rule worth keeping is larger, and it generalises every failure found the "
+                  "same day: A CHANNEL IS VERIFIED AT THE RECEIVING END. Producing a message, "
+                  "recording it, and asserting on it in a test all pass while nobody is listening. "
+                  "This is the flight-recorder corollary about uninstrumented fakes, one level up — "
+                  "the tape was real and it was recording the wrong side of the boundary.\n\n"
+                  "It also corrects the ground under information-not-exclusion, which deleted the "
+                  "v1 mutex on the sentence 'the hook prints into every agent's context on every "
+                  "tool call'. That was false when it was written. The conclusion survives — today's "
+                  "two-session run confirmed cooperation works — but it was reached on a mechanism "
+                  "that did not exist, and the entry stands unedited so that stays visible."},
+         children=[
+             Node(id="alt-keep-printing-to-stdout", kind="alternative",
+                  name="Leave `print()` alone; the notes are for the human in the transcript",
+                  payload={"why": "they are not in the transcript either — the debug log is the "
+                                  "whole audience. And the notes are addressed to an agent: 'stay "
+                                  "out of their region' is not advice a human can act on"}),
+             Node(id="alt-exit-2-to-reach-the-model", kind="alternative",
+                  name="Use exit 2, whose stderr does reach the model",
+                  payload={"why": "exit 2 BLOCKS the call. It is the one thing this library will "
+                                  "not do, and reaching the agent by refusing it is the mutex "
+                                  "returning through the informer's door"}),
+             Node(id="alt-permission-decision-reason", kind="alternative",
+                  name="Allow the call with a `permissionDecisionReason`",
+                  payload={"why": "checked rather than assumed: the reason goes to the transcript "
+                                  "and the permission UI, not into the model's context. It would "
+                                  "have looked like a fix and changed nothing — the same shape as "
+                                  "the bug"}),
+         ]),
+
+    Node(id="there-is-no-warning-before-a-write", kind="decision",
+         name="heads_up() is deleted: a hook reaches an agent before its tool only by refusing it. "
+              "What arrives in time is PULLED, not pushed",
+         payload={"rationale":
+                  "Context attached to PreToolUse is delivered beside the TOOL RESULT — after the "
+                  "write. The only thing that reaches a model before its tool runs is exit 2, which "
+                  "refuses the call. So the pre-write warning was a warning delivered after the "
+                  "thing it warned about, still worded 'if you write it anyway', addressed to an "
+                  "agent that already had.\n\n"
+                  "Deleted rather than reworded. Rewording leaves two paths saying the same thing "
+                  "at the same moment in different words, and a docstring promising a guarantee the "
+                  "harness cannot give. Edit/Write now settle exactly like a shell — snapshot "
+                  "before, reported after, remedy attached — which is what observe-do-not-predict "
+                  "said all along.\n\n"
+                  "It closed a real hole in the same stroke. post_tool_use used to return early on "
+                  "a declared write, on the assumption the warning had done the job. It had not, "
+                  "and could not: so an Edit into another agent's region got an undeliverable "
+                  "warning and NO after-the-fact report — the one write in the system the witness "
+                  "never saw, on either side.\n\n"
+                  "WHAT DOES ARRIVE IN TIME IS PULLED. The two-session run settled this: the other "
+                  "agent called scopes(), saw the holder, and DECLINED TO WRITE — unprompted. It "
+                  "wrote only when its human overrode it. The pre-write moment is not reachable by "
+                  "pushing information at an agent; it is reachable by the agent asking, and the "
+                  "MCP reply is synchronous. The courier's job is to make sure it knows to ask, and "
+                  "to tell it afterwards when it did not.\n\n"
+                  "The one push that does arrive before an agent acts is UserPromptSubmit, whose "
+                  "output the harness puts in front of the model. HANDLERS had routed it since v2, "
+                  "commented 'the same read-side check, on the way back in' — and EVENTS never "
+                  "wired it, so it never ran once. The drift check on the way back in never "
+                  "happened either. Wired now, and the test asserts the WIRING: the handler was "
+                  "always fine, and a test of the handler passes either way."},
+         children=[
+             Node(id="alt-reword-the-heads-up", kind="alternative",
+                  name="Keep heads_up() and reword it as an after-the-fact report",
+                  payload={"why": "then it IS settle(), said twice, in two code paths, at the same "
+                                  "moment, in different words. Two things that fire together and "
+                                  "disagree in wording are how a reader learns to trust neither"}),
+             Node(id="alt-block-just-this-one-case", kind="alternative",
+                  name="Use exit 2 for a write into another agent's declared region — the one case "
+                       "where blocking is obviously right",
+                  payload={"why": "it is a mutex on the path where prevention looks cheapest, which "
+                                  "is exactly how v1 began. information-not-exclusion gave up "
+                                  "exclusion knowingly; taking it back for the case that feels "
+                                  "deserving is taking it back"}),
+         ]),
+
+    Node(id="tell-both-parties", kind="decision",
+         name="The agent whose region was written is told too — and the offender is not asked to "
+              "repair what it never saw",
+         payload={"rationale":
+                  "`victim` existed in exactly two places: computed in scope.violations, and "
+                  "rendered into the OFFENDER's message. The agent whose half-finished work had "
+                  "just been overwritten was addressed by nothing.\n\n"
+                  "So the remedy asked the wrong party. 'Put back what was theirs' asks an agent to "
+                  "reconstruct bytes it never saw — the work may never have been committed, so "
+                  "nothing readable says what was there. That is a guess, in a library whose whole "
+                  "design is the refusal to guess (observe-do-not-predict). And obeying it means "
+                  "writing into a region that is still not yours: a real session followed the "
+                  "remedy, reverted, and collected a SECOND violation for complying. An alarm that "
+                  "fires when you do as you are told is an alarm that gets ignored.\n\n"
+                  "Both parties are now addressed, and told DIFFERENT things. The offender: stop, "
+                  "leave it, they have been told. The victim, on its next tool call or its human's "
+                  "next prompt: someone wrote here, LOOK before you carry on — your picture of "
+                  "these files predates their write, so an edit against what you remember "
+                  "overwrites it again, this time by you. Keep, merge or restore is a judgement "
+                  "only the victim can make. The single thing the offender is still told to undo is "
+                  "a commit that swept their work: that one is recoverable and genuinely its own.\n\n"
+                  "KNOWN LIMIT, accepted rather than hidden: the victim is not woken. Nothing can "
+                  "push into a running turn (waiting-is-a-subscription), so the note waits for its "
+                  "next hook. The window is bounded and cheap — a working victim fires a hook within "
+                  "seconds, and a parked one is reached at UserPromptSubmit BEFORE it acts. The one "
+                  "uncovered case is a victim whose very next call writes that same file, and that "
+                  "write goes into its own region: the one write nobody needs protecting from.\n\n"
+                  "The inbox also exposed an older bug it did not cause: _memo_path hashed whatever "
+                  "repo spelling it was handed, and the callers disagree (repo_root gives git's "
+                  "C:/..., repo_of a backslashed abspath). One checkout, several keys — so 'the "
+                  "intro, once' was only as good as the key it was remembered under. Keyed on "
+                  "env.canonical() now, which is filesystem-is-the-namespace applying to a second "
+                  "store nobody had noticed was a namespace."},
+         children=[
+             Node(id="alt-offender-restores-it", kind="alternative",
+                  name="Keep asking the offender to put the work back",
+                  payload={"why": "it cannot. Uncommitted work leaves no readable trace of what it "
+                                  "was, so restoring is guessing, and the attempt is a second write "
+                                  "into someone else's region — observed firing the alarm at an "
+                                  "agent that was obeying the alarm"}),
+             Node(id="alt-mirror-one-message-to-both", kind="alternative",
+                  name="Send both parties the same violation report",
+                  payload={"why": "cheaper, and wrong in the only way that matters: the two need "
+                                  "OPPOSITE instructions. The offender must stop touching it; the "
+                                  "victim must go and look at it. One text cannot say both"}),
+             Node(id="alt-wake-the-victim", kind="alternative",
+                  name="Wake the victim with a background waiter, as v1 did for blocked sessions",
+                  payload={"why": "v1 built exactly this and it was the worst thing in the repo — "
+                                  "the two-shell ticket, the quoting bug, and `wait_until_free` in "
+                                  "ZERO of 4528 recorded sessions. Reintroducing it to save the few "
+                                  "seconds measured here is the mutex's ghost walking back in"}),
+         ]),
+
+    Node(id="a-channel-they-can-repurpose", kind="decision",
+         name="An addressed message substrate — direct pushes, broadcast and channel are pull-only; "
+              "a transponder, not a chatter phone",
+         payload={"rationale":
+                  "The map answers WHERE, plus one line of why. It cannot carry what an agent is "
+                  "actually doing, and that is the information the other agent needs most — two "
+                  "sessions in one checkout are not rivals, they are building one app. Knowing that "
+                  "a rewrite of the auth middleware is COMING changes how you write the module "
+                  "beside it: you make it future-proof rather than merely correct. Nothing in this "
+                  "library could say that. A conflict ended with 'file an issue for their part', "
+                  "which is what you write when there is no channel — it routes a live negotiation "
+                  "through a human and a day.\n\n"
+                  "The user's framing decided the shape: an item left in the cabin, the way ground "
+                  "control solves a problem with what is aboard. A general channel can be "
+                  "repurposed by intelligent agents for the case nobody anticipated; a "
+                  "special-purpose protocol only ever solves the case we imagined. So: free-form "
+                  "messages, addressed three ways — broadcast (this machine), channel (one "
+                  "checkout), direct (one agent).\n\n"
+                  "IT STAYS A TRANSPONDER. Direct messages push into the recipient; broadcast and "
+                  "channel are PULL-ONLY. This is not squeamishness about volume, it is that chat "
+                  "traffic and the scope-violation alarm share one delivery path, and an agent "
+                  "taught to skim the channel skims the alarm with it. The library's oldest lesson "
+                  "is that a note printed forever is a note nobody reads. An agent that wants the "
+                  "room asks for it — and one that has been hit once will ask.\n\n"
+                  "Storage is an append-only log per address with a per-reader cursor, which is why "
+                  "reading is NOT destructive: it marks the message read for you and leaves it "
+                  "standing for everyone else. A queue that deletes on read cannot serve two "
+                  "addressees, and cannot be re-read by an agent that wants to check what it was "
+                  "told.\n\n"
+                  "STATED LIMIT, because it will otherwise be discovered as a hang: there is no "
+                  "wake-up. Nothing can push into a running turn, so a reply lands when the other "
+                  "side next fires a hook, or never, if it has finished. This is letters, not "
+                  "conversation. It carries 'I will need api/** when you are done' perfectly well "
+                  "and cannot carry a handshake. The system stamps sender identity and the sender's "
+                  "current claims onto every message, so an assertion about the map can always be "
+                  "checked against the map rather than believed."},
+         children=[
+             Node(id="alt-no-channel-file-an-issue", kind="alternative",
+                  name="Keep the status quo: a conflict tells the asker to take a narrower scope "
+                       "and file an issue",
+                  payload={"why": "what exists, and it is the absence of a channel wearing a "
+                                  "procedure. It answers a live question — 'can I have this, and "
+                                  "when?' — by sending one agent away to write a ticket for a human "
+                                  "to read tomorrow, while the other agent is right there"}),
+             Node(id="alt-push-everything", kind="alternative",
+                  name="Deliver all traffic — broadcast and channel included — into every agent's "
+                       "context on every hook call",
+                  payload={"why": "the simplest thing, and it destroys two channels at once. It "
+                                  "makes the chatter useless (nobody reads a feed) AND degrades the "
+                                  "violation report, which arrives by the same route and depends on "
+                                  "being rare to be read at all"}),
+             Node(id="alt-structured-negotiation-protocol", kind="alternative",
+                  name="A typed handshake — request / grant / release — instead of free-form text",
+                  payload={"why": "solves exactly the case we thought of and nothing else, which is "
+                                  "the opposite of the reason for building it. It also presumes a "
+                                  "REPLY, and the no-wake-up limit means a protocol that waits for "
+                                  "one is a protocol that hangs"}),
          ]),
 
     Node(id="inform-peers-never-police-an-agents-internals", kind="decision",

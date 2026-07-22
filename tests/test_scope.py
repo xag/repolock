@@ -142,6 +142,29 @@ def test_the_agent_whose_region_was_written_is_told_on_its_next_call(repo):
         "redelivered — a note repeated on every call is a note that stops being read")
 
 
+def test_a_session_parked_on_a_question_is_told_on_the_way_back_in(repo):
+    """A victim that has stopped to ask its human something makes no tool calls, so mail addressed
+    to it waits until it writes again — one call too late. UserPromptSubmit is where it is reached,
+    and it is the only event whose output the harness puts in front of the model BEFORE it acts.
+
+    The wiring assertion is the load-bearing one, and it is not paranoia. `HANDLERS` routed
+    UserPromptSubmit to session_start for the whole of v2, with a comment saying so, and `EVENTS`
+    never wired it — so it never ran once. A test of the handler passes either way; only a test that
+    the event is WIRED can tell the difference between a feature and a comment about a feature."""
+    from transponder.hooks.claude_code import EVENTS
+
+    assert "UserPromptSubmit" in EVENTS, "the handler exists but nothing will ever call it"
+
+    dirs(repo, "api", "web")
+    declare(repo, "A", ["api/**"], intent="the rate limiter")
+    declare(repo, "B", ["web/**"])
+    claude_write(repo, "B", path="api/server.py")
+
+    back = run_hook(CLAUDE, {"hook_event_name": "UserPromptSubmit", "cwd": repo, "session_id": "A"})
+    assert "SOMEONE WROTE IN YOUR REGION" in back.stdout, (
+        "a session coming back from its human was not told its region had been written")
+
+
 def test_an_agent_walking_into_a_shared_checkout_is_introduced_once(repo):
     """The fact an agent cannot see from inside its own context: who else is here. Delivered at
     the first moment it matters, not repeated on every call — a note printed forever is a note

@@ -247,6 +247,13 @@ EVENTS = {
     "PostToolUse": _WATCHED,
     "Stop": None,
     "SessionStart": None,
+    # HANDLERS has routed this to session_start since v2 — "the same read-side check, on the way
+    # back in" — and it was never wired here, so it never ran. Not once. It is the most valuable
+    # event of the four and the only one that reaches the model BEFORE it acts (stdout on
+    # UserPromptSubmit is added as context; on PreToolUse it lands beside the tool result). It is
+    # also exactly where a victim is reached: a session parked on a question makes no tool calls,
+    # so mail addressed to it waits until it writes again — which is one call too late.
+    "UserPromptSubmit": None,
 }
 
 
