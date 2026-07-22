@@ -115,6 +115,33 @@ def test_a_write_into_anothers_region_is_reported_after_it_lands(repo):
     assert not res.pre_stdout.strip(), "the pre half spoke about a write it could not stop in time"
 
 
+def test_the_agent_whose_region_was_written_is_told_on_its_next_call(repo):
+    """Both parties, or neither is served.
+
+    `victim` used to appear in exactly two places: computed in scope.violations, and rendered into
+    the OFFENDER's message. The agent whose half-finished work had just been overwritten was
+    addressed by nothing at all — so the remedy asked the offender to put back bytes it had never
+    seen (a guess, in a library that refuses to guess) and made it write into the region a second
+    time to do it, firing the alarm again at an agent that was complying."""
+    dirs(repo, "api", "web")
+    declare(repo, "A", ["api/**"], intent="the rate limiter")
+    declare(repo, "B", ["web/**"])
+
+    offender = claude_write(repo, "B", path="api/server.py")
+    assert "SCOPE VIOLATION" in offender.stdout
+    assert "THEY HAVE BEEN TOLD TOO" in offender.stdout
+    assert "Put back what was theirs" not in offender.stdout, (
+        "the offender is being asked to reconstruct work it never saw")
+
+    mail = claude_shell(repo, "A", "cat a.txt")
+    assert "SOMEONE WROTE IN YOUR REGION" in mail.pre_stdout, "the victim was never told"
+    assert "api/server.py" in mail.pre_stdout and "agent B" in mail.pre_stdout
+
+    again = claude_shell(repo, "A", "cat a.txt")
+    assert "SOMEONE WROTE IN YOUR REGION" not in again.pre_stdout, (
+        "redelivered — a note repeated on every call is a note that stops being read")
+
+
 def test_an_agent_walking_into_a_shared_checkout_is_introduced_once(repo):
     """The fact an agent cannot see from inside its own context: who else is here. Delivered at
     the first moment it matters, not repeated on every call — a note printed forever is a note

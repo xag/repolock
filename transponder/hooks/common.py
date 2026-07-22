@@ -39,6 +39,7 @@ SEEN_DIR = "seen"            # per-(session, repo): the last HEAD this session s
 SNAP_DIR = "snap"            # ...and the witness's before-picture for the tool now running
 NOTED_DIR = "noted"          # ...and whether the courier already introduced this shared checkout
 WARNED_DIR = "warned"        # ...and whether we already said the witness's settle half is missing
+INBOX_DIR = "inbox"          # ...and notes left FOR an agent by someone who wrote in its region
 
 
 def repo_root(cwd: str) -> str | None:
@@ -67,9 +68,19 @@ def repo_of(path: str) -> str | None:
 # --- the per-(session, repo) memories -------------------------------------------------------------
 
 def _memo_path(kind: str, session: str, repo: str) -> str:
+    """Keyed on the CANONICAL repo, for the reason the claims namespace is (filesystem-is-the-
+    namespace): one checkout must not have several keys.
+
+    It used to hash the string it was handed, and the callers do not agree on how to spell a repo —
+    `repo_root()` returns git's `C:/Users/...`, `repo_of()` returns an abspath with backslashes, and
+    anything outside the hooks passes whatever it has. Same checkout, different sha256, different
+    memo. That silently broke more than the inbox that caught it: a session introduced to a shared
+    checkout through a Bash (repo_root) could be introduced to it AGAIN through an Edit (repo_of),
+    and the "once, or it is spam" guarantee is only as good as the key it is remembered under.
+    """
     d = os.path.join(os.path.dirname(env.lock_dir()), kind)
     os.makedirs(d, exist_ok=True)
-    key = hashlib.sha256(f"{session}:{repo}".encode()).hexdigest()[:16]
+    key = hashlib.sha256(f"{session}:{env.canonical(repo)}".encode()).hexdigest()[:16]
     return os.path.join(d, f"{key}.txt")
 
 
@@ -96,6 +107,51 @@ def _forget(kind: str, session: str, repo: str) -> None:
         os.remove(_memo_path(kind, session, repo))
     except OSError:
         pass
+
+
+def post(victim: str, repo: str, note: str) -> None:
+    """Leave a note FOR the agent whose region was written — the only party that knows what its own
+    half-finished work was.
+
+    Until this existed, `victim` appeared in exactly two places in the library: computed in
+    scope.violations, and rendered into the OFFENDER's message. The agent whose work was overwritten
+    was never addressed by anything. So the remedy had to ask the offender to restore bytes it had
+    never seen, which is the one move this library rejects everywhere else — predicting what must
+    have been there instead of observing it — and it made the offender write into the region again
+    to do it, tripping the alarm a second time on an agent that was complying.
+
+    Appended, not overwritten: two agents can land on one victim before it next runs, and the second
+    note must not erase the first. Drained by collect() on the victim's next tool call.
+    """
+    line = json.dumps({"at": env.now(), "note": note})
+    try:
+        with open(_memo_path(INBOX_DIR, victim, repo), "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except OSError:
+        pass
+
+
+def collect(session: str, repo: str) -> list[str]:
+    """Take delivery of what was left for this agent, once. Read-and-delete, because a note
+    redelivered on every call is a note that stops being read."""
+    try:
+        with open(_memo_path(INBOX_DIR, session, repo), encoding="utf-8") as f:
+            raw = f.read()
+    except OSError:
+        return []
+    _forget(INBOX_DIR, session, repo)
+
+    out = []
+    for line in raw.splitlines():
+        if not line.strip():
+            continue
+        try:
+            item = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        ago = max(0, int(env.now() - item.get("at", 0)))
+        out.append(f"{item.get('note', '')}\n  (left {ago}s ago — the tree may have moved again since)")
+    return out
 
 
 def remember_head(session: str, repo: str, head: str | None) -> None:
@@ -226,8 +282,10 @@ def settle(repo: str, session: str, intent: str) -> list[str]:
 
     notes = []
     if bad := scope.violations(session, written):
-        notes.append(format_violation(repo, bad,
-                                      head_moved=before.get("HEAD") != after.get("HEAD")))
+        head_moved = before.get("HEAD") != after.get("HEAD")
+        notes.append(format_violation(repo, bad, head_moved=head_moved))
+        for victim, paths in _by_victim(bad).items():
+            post(victim, repo, format_intrusion(repo, session, paths, head_moved))
     if scope.declared(session) and (loose := scope.stray(session, written)):
         notes.append(
             "transponder: you wrote outside your declared scope, into a region nobody has claimed:\n"
@@ -249,21 +307,57 @@ def format_violation(repo: str, bad: list[dict], head_moved: bool) -> str:
                    + (f" — {v['intent']}" if v["intent"] else ""))
     out += [
         "",
-        "You are not in trouble; you are being told before it becomes a mangled rebase. STOP, then:",
-        "  1. `git status` / `git diff` — look at what is actually there.",
-        "  2. Put back what was theirs. Do not commit it, do not 'fix' it.",
+        "You are not in trouble; you are being told before it becomes a mangled rebase.",
+        "THEY HAVE BEEN TOLD TOO — a note is waiting for them, naming you and these paths.",
+        "",
+        "STOP, and do NOT try to put their work back. You cannot: what you overwrote may never",
+        "have been committed, so nothing you can read tells you what it was, and restoring it by",
+        "guess is a second write into a region that is still not yours. They know what they were",
+        "doing. Leaving it for them is the fix, not laziness.",
+        "  1. Stop writing here. Leave the file exactly as it is now.",
+        "  2. `git status` / `git diff` — look, so you can say what you did if asked.",
     ]
     if head_moved:
         out += [
-            "  3. YOU COMMITTED THEIR WORK. This is the one violation that is cleanly recoverable,",
-            "     so recover it now, before anything else lands on top:",
+            "  3. YOU COMMITTED THEIR WORK, and that one IS yours to undo — it is your commit, and",
+            "     it is cleanly recoverable. Do it now, before anything lands on top:",
             "         git reset --soft HEAD~1     # un-commit, keep the tree",
             "         git restore --staged <their paths>",
             "     A `git add -A` sweeps up every dirty file in the checkout, including the ones",
             "     another agent is halfway through. Stage YOUR paths by name, never `-A`.",
         ]
     else:
-        out.append("  3. Then declare the scope you actually needed, and carry on inside it.")
+        out.append("  3. Declare the scope you actually needed, and carry on inside it.")
+    return "\n".join(out)
+
+
+def _by_victim(bad: list[dict]) -> dict[str, list[str]]:
+    out: dict[str, list[str]] = {}
+    for v in bad:
+        out.setdefault(v["victim"], []).append(v["path"])
+    return out
+
+
+def format_intrusion(repo: str, offender: str, paths: list[str], head_moved: bool) -> str:
+    """What the VICTIM is told, on its next tool call. Deliberately not a mirror of the offender's
+    message: that one says stop, this one says look. Only this agent knows what its work was, so
+    only it can decide whether what is on disk now is a loss, a merge, or fine."""
+    out = ["SOMEONE WROTE IN YOUR REGION — while you were working, another agent wrote here:",
+           f"  repo: {repo}", ""]
+    for p in paths[:8]:
+        out.append(f"  {_rel(repo, p)}")
+    out += [
+        "",
+        f"  by agent {offender}, who has been told to stop and to leave it for you.",
+        "",
+        "LOOK BEFORE YOU CARRY ON. Your picture of these files is from before that write, so an",
+        "edit made against what you remember can overwrite it a second time — this time by you.",
+        "  1. `git diff` / re-read the files above. Decide: keep theirs, merge, or restore yours.",
+        "  2. Only you know what was half-finished here. Nobody else can make that call.",
+    ]
+    if head_moved:
+        out.append("  3. HISTORY MOVED as well — commits you remember may have been replaced. "
+                   "Re-read the log before reasoning about it.")
     return "\n".join(out)
 
 

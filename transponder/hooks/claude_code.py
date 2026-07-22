@@ -163,6 +163,9 @@ def pre_tool_use(payload: dict) -> None:
     session = payload.get("session_id") or "unknown"
 
     notes = []
+    # Mail first, and before anything else this call might say: it is the only note that is about
+    # THIS agent's own work having been touched, and it is stale the moment the agent writes again.
+    notes += common.collect(session, repo)
     if note := common.shared_note(repo, session):
         notes.append(note)
     # Every tool gets the before-picture now, Edit/Write included. They used to be handled here
@@ -209,6 +212,11 @@ def session_start(payload: dict) -> None:
         return
     _record()
     session = payload.get("session_id") or "unknown"
+    # Also drained here, and this is the one moment it beats PreToolUse: stdout on SessionStart and
+    # UserPromptSubmit reaches the model BEFORE it acts. An agent coming back to a region somebody
+    # wrote in should learn it before its first tool call, not beside the result of one.
+    for note in common.collect(session, repo):
+        _say(note)
     if note := common.drift_note(session, repo):
         _say(note)
 
