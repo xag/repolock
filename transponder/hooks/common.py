@@ -249,10 +249,7 @@ def watch(repo: str, session: str) -> list[str]:
         notes.append("transponder: the witness's settle half (PostToolUse) is not wired, so writes "
                      "here are NOT being observed. Fix the hooks (python -m transponder.toggle on) and "
                      "restart this session — it snapshotted its hooks when it started.")
-    # The time goes in the WRAPPER, not the snapshot: written_between() treats every key that is not
-    # "HEAD" as a path, so a timestamp stored inside it would be reported as a file that changed.
-    _remember(SNAP_DIR, session, repo,
-              json.dumps({"at": env.now(), "snap": witness.snapshot(repo)}))
+    _remember(SNAP_DIR, session, repo, json.dumps({"snap": witness.snapshot(repo)}))
     return notes
 
 
@@ -290,10 +287,8 @@ def settle(repo: str, session: str, intent: str, declared: str = "") -> list[str
         memo_obj = json.loads(memo)
     except (json.JSONDecodeError, ValueError):
         return []
-    # A memo written before the wrapper existed is the bare snapshot; `at=0` then reads as "we do
-    # not know when the window opened", which makes every holder look inactive — hedged, not silent.
+    # A memo written before the wrapper existed is the bare snapshot itself.
     before = memo_obj.get("snap", memo_obj) if isinstance(memo_obj, dict) else memo_obj
-    since = memo_obj.get("at", 0) if isinstance(memo_obj, dict) else 0
 
     after = witness.snapshot(repo)
     written = witness.written_between(repo, before, after)
@@ -307,21 +302,19 @@ def settle(repo: str, session: str, intent: str, declared: str = "") -> list[str
     if bad := scope.violations(session, written):
         head_moved = before.get("HEAD") != after.get("HEAD")
         target = scope.canon(declared) if declared else None
-        # The holder was working in its own region while this call ran, and a fingerprint cannot
-        # tell an author from a bystander. Only THIS case produced the false alarms, so only this
-        # case is hedged — an idle holder's region changing during your call still names you, which
-        # is what the library has always claimed and what it can still stand behind.
-        theirs = [v for v in bad
-                  if v["path"] != target and _was_active(v["victim"], since)]
-        ours = [v for v in bad if v not in theirs]
+        ours = [v for v in bad if v["path"] == target]
+        unknown = [v for v in bad if v["path"] != target]
 
         if ours:
             notes.append(format_violation(repo, ours, head_moved=head_moved))
             for victim, paths in _by_victim(ours).items():
                 post(victim, repo, format_intrusion(repo, session, paths, head_moved))
-        if theirs:
-            # Said once, to the only party who can tell whether it was them — and NOT to the holder.
-            notes.append(format_probably_theirs(repo, theirs))
+        if unknown:
+            # Told to the ONE party that knows the answer, and to nobody else. The witness cannot
+            # name an author here, so it does not name one — not "probably the owner", not "probably
+            # you". The agent reading this knows whether it wrote, and the channel exists for it to
+            # say so.
+            notes.append(format_unattributed(repo, unknown, head_moved=head_moved))
     if scope.declared(session) and (loose := scope.stray(session, written)):
         notes.append(
             "transponder: you wrote outside your declared scope, into a region nobody has claimed:\n"
@@ -332,27 +325,22 @@ def settle(repo: str, session: str, intent: str, declared: str = "") -> list[str
     return notes
 
 
-def _was_active(holder: str, since: float) -> bool:
-    """Did the region's owner renew its claim inside the window we are judging?
+def format_unattributed(repo: str, bad: list[dict], head_moved: bool = False) -> str:
+    """A region you do not hold changed while your call ran, and nobody knows who did it.
 
-    Renewal is activity — every tool call renews (hyp-renewal-on-activity), and so does any
-    long-running participant that keeps its claim alive. It is the only evidence available about
-    who else was awake, and it is evidence rather than a guess about a command: it says an agent
-    was working, not what it wrote.
+    Two wordings were tried here first and both were guesses wearing an observation's clothes. "You
+    just wrote inside another agent's reserved region" was fiction the first time two agents ran at
+    once — a holder appending to its own declared file every ten seconds, a passer-by whose only
+    crime was a read loop long enough to span a tick, four false accusations to each party. Grading
+    it by whether the owner had recently renewed was no better: renewal proves an agent was AWAKE,
+    never that it touched a file, and "nobody else was awake, so it was probably you" is the same
+    inference with less behind it.
+
+    What is known is the whole of what is said. The agent reading this is the only party in the
+    system that knows whether it wrote, so it is the only party told — and it has a channel to say
+    so if it did.
     """
-    claim = scope.mine(holder)
-    return bool(claim) and claim.get("renewed_at", 0) >= since > 0
-
-
-def format_probably_theirs(repo: str, bad: list[dict]) -> str:
-    """A region changed during your call, and its owner was working in it at the time.
-
-    The old wording for this was "SCOPE VIOLATION — you just wrote inside another agent's reserved
-    region", and it was fiction: a holder appending to its own declared file every ten seconds, and
-    a passer-by whose only crime was a read loop long enough to span a tick. Said four times, and
-    four matching notes went to the holder claiming its work had been trampled.
-    """
-    out = ["A REGION YOU DO NOT HOLD CHANGED WHILE YOUR CALL WAS RUNNING — most likely its owner.",
+    out = ["A REGION YOU DO NOT HOLD CHANGED WHILE YOUR CALL WAS RUNNING.",
            f"  repo: {repo}", ""]
     for v in bad:
         out.append(f"  {_rel(repo, v['path'])}")
@@ -360,13 +348,29 @@ def format_probably_theirs(repo: str, bad: list[dict]) -> str:
                    + (f" — {v['intent']}" if v["intent"] else ""))
     out += [
         "",
-        "They renewed their claim while your call was in flight, so they were working in it — and a",
-        "fingerprint proves the tree moved, never who moved it. THEY HAVE NOT BEEN TOLD ANYTHING: a",
-        "false accusation delivered to the agent whose work is at stake is worse than silence.",
+        "The witness saw the tree move; it cannot see who moved it. Your command may have done this,",
+        "or the owner may have been working in their own region at the same moment — from outside,",
+        "those are the same picture. So nothing has been said to them, and no one is being accused.",
         "",
-        "If that write WAS yours, you are in their region: stop, and declare what you need.",
-        "If it was not, there is nothing to do — this note is the whole of it.",
+        "YOU know which it was:",
+        "  * if it was you — stop writing here, leave it exactly as it stands, and tell them:",
+        "        send_message(repo, session_id, 'I wrote <paths>; sorry, stopping', to='<agent>')",
+        "    then declare the scope you actually needed. Do not restore their work by guess.",
+        "  * if it was not you — there is nothing to do. This note is the whole of it.",
     ]
+    if head_moved:
+        out += [
+            "",
+            "HISTORY MOVED during this call, and the new commit contains the paths above — the",
+            "founding incident of this library is `git add -A` sweeping a neighbour's half-finished",
+            "work into somebody else's commit. IF THAT COMMIT IS YOURS, it is the one violation that",
+            "is cleanly recoverable, and recovering it now is cheap:",
+            "        git reset --soft HEAD~1     # un-commit, keep the tree",
+            "        git restore --staged <their paths>",
+            "    then stage YOUR paths by name, never `-A`.",
+            "IF IT IS NOT YOURS, do NOT run that — you would be undoing somebody else's commit on a",
+            "guess, which is the mistake this message exists to avoid making on your behalf.",
+        ]
     return "\n".join(out)
 
 

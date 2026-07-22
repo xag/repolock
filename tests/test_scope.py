@@ -252,7 +252,7 @@ def test_a_holder_writing_its_own_region_is_not_blamed_on_a_passer_by(repo):
     post = run_hook(CLAUDE, {**payload, "hook_event_name": "PostToolUse"})
 
     assert "SCOPE VIOLATION" not in post.stdout, "a reader was named as the author of someone's own write"
-    assert "most likely its owner" in post.stdout, "the passer-by should still be told what it saw"
+    assert "cannot see who moved it" in post.stdout, "the passer-by should still be told what it saw"
     assert not [m for m in messages.unread("A", repo, kinds=("direct",), mark=False)
                 if "SOMEONE WROTE IN YOUR REGION" in m["body"]], (
         "the holder was told its own work had been trampled")
@@ -288,7 +288,7 @@ def test_a_shell_write_from_a_different_checkout_is_still_witnessed(repo, tmp_pa
     post = run_hook(CLAUDE, {**payload, "hook_event_name": "PostToolUse"})
 
     assert post.returncode == 0, "nothing is ever refused"
-    assert "SCOPE VIOLATION" in post.stdout, (
+    assert "A REGION YOU DO NOT HOLD CHANGED" in post.stdout, (
         "a shell write into a declared region went unwitnessed because it came from another cwd")
     assert "agent A" in post.stdout
 
@@ -348,7 +348,12 @@ def test_a_write_inside_your_own_scope_is_silent(repo):
 
 def test_a_shell_write_into_anothers_region_is_witnessed_and_named(repo):
     """A shell's target is not knowable before it runs — the old §7a proof stands — so this could
-    not have been prevented and is not. It is NAMED: the path, the victim, the remedy."""
+    not have been prevented and is not. The path and the owner are NAMED; the author is not.
+
+    It used to say "you just wrote inside another agent's reserved region", and that sentence was
+    fiction whenever the owner was also working: a fingerprint proves the tree moved, not who moved
+    it. Only the agent reading this knows which it was, so it is the only party told, and the
+    channel is there for it to own up."""
     dirs(repo, "api", "web")
     declare(repo, "A", ["api/**"], intent="the rate limiter")
     declare(repo, "B", ["web/**"])
@@ -356,9 +361,10 @@ def test_a_shell_write_into_anothers_region_is_witnessed_and_named(repo):
     res = claude_shell(repo, "B", "echo boom > api/server.py")
 
     assert res.returncode == 0
-    assert "SCOPE VIOLATION" in res.stdout
+    assert "A REGION YOU DO NOT HOLD CHANGED" in res.stdout
     assert "api/server.py" in res.stdout
     assert "agent A" in res.stdout
+    assert "if it was you" in res.stdout, "the one party who knows must be asked, not accused"
 
 
 def test_a_commit_that_sweeps_anothers_work_is_the_loudest_thing_said(repo):
@@ -375,10 +381,12 @@ def test_a_commit_that_sweeps_anothers_work_is_the_loudest_thing_said(repo):
 
     res = claude_shell(repo, "A", "echo x > api/server.py && git add -A && git commit -qm sweep")
 
-    assert "SCOPE VIOLATION" in res.stdout
     assert "web/page.js" in res.stdout, "the commit swept B's file and nobody noticed"
     assert "agent B" in res.stdout
     assert "git reset --soft HEAD~1" in res.stdout, "a recoverable violation must carry its remedy"
+    assert "IF THAT COMMIT IS YOURS" in res.stdout, (
+        "reset --soft is destructive when the commit is somebody else's — the remedy must be "
+        "conditional now that the witness does not claim to know whose it is")
 
 
 def test_a_participant_straying_onto_unclaimed_ground_is_told_to_declare(repo):

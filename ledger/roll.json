@@ -310,6 +310,21 @@
     "digest": "470ef7227b5d"
   },
   {
+    "path": "nobody-is-named-unless-the-tool-named-the-file",
+    "kind": "decision",
+    "digest": "b4f5fe9f36aa"
+  },
+  {
+    "path": "nobody-is-named-unless-the-tool-named-the-file/alt-grade-by-who-was-awake",
+    "kind": "alternative",
+    "digest": "d422c8ead181"
+  },
+  {
+    "path": "nobody-is-named-unless-the-tool-named-the-file/alt-tell-the-victim-anyway-hedged",
+    "kind": "alternative",
+    "digest": "6054e45c079e"
+  },
+  {
     "path": "observe-do-not-predict",
     "kind": "decision",
     "digest": "64ba1966c79e"

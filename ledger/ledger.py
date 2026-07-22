@@ -777,6 +777,57 @@ DECISIONS = [
                                   "inception, bought for one grade of confidence"}),
          ]),
 
+    Node(id="nobody-is-named-unless-the-tool-named-the-file", kind="decision",
+         name="One grade of attribution, not three: a declared path has an author, and everything "
+              "else is 'this changed while you ran'",
+         links={"supersedes": ["a-fingerprint-cannot-name-an-author"],
+                "rests_on": ["observe-do-not-predict"]},
+         payload={"rationale":
+                  "The entry this replaces was written hours earlier with the right title and a "
+                  "wrong middle. It graded attribution three ways, and two of the grades were "
+                  "inferences wearing an observation's clothes: 'the owner renewed its claim "
+                  "recently, so the write was probably theirs', and its complement, 'nobody else "
+                  "was awake, so it was probably yours'. The user's correction was one sentence — "
+                  "YOU'RE STILL GUESSING — and it is exactly right. Renewal proves an agent was "
+                  "AWAKE. It says nothing whatever about who touched a file. The second branch is "
+                  "the same inference with even less behind it, and it was the one that kept the "
+                  "loud wording, which is to say it kept the fiction where it did the most "
+                  "damage.\n\n"
+                  "So there is one grade. A tool that DECLARED the file it would write has an "
+                  "author, because the harness said so — that is a fact, and it is reported as "
+                  "before: named, loud, remedy attached, victim told. Everything else is stated as "
+                  "what was actually seen: a region you do not hold changed while your call was "
+                  "running, the witness cannot see who moved it, and only YOU know which it was.\n\n"
+                  "It is told to the agent that ran the call and to nobody else, because that agent "
+                  "is the only party in the system that knows the answer — and since this morning it "
+                  "has a channel to say so, which is what makes the honest version workable at all. "
+                  "The message asks it to own up rather than telling someone else it did.\n\n"
+                  "The commit remedy survives, CONDITIONALLY, and the condition is a safety "
+                  "property rather than a hedge: `git reset --soft HEAD~1` undoes somebody's commit, "
+                  "so handing it to an agent that may not have made the commit would be this "
+                  "library making, on the agent's behalf, precisely the mistake it exists to "
+                  "prevent.\n\n"
+                  "KNOWINGLY GIVEN UP: the victim is no longer told about shell writes at all. That "
+                  "is a real loss and it is the price of not inventing. The victim learns from the "
+                  "writer, over the channel, if the writer chooses to speak — the same cooperative "
+                  "bet the whole of v2 already rests on, applied to the one fact only one agent "
+                  "holds."},
+         children=[
+             Node(id="alt-grade-by-who-was-awake", kind="alternative",
+                  name="Keep the three grades: renewal decides whether the owner or the passer-by is "
+                       "the likelier author",
+                  payload={"why": "the superseded entry, and it lasted about an hour. It is a guess "
+                                  "with a plausible mechanism, which is the most dangerous kind: an "
+                                  "owner that goes quiet mid-task, or any writer that is not an "
+                                  "agent at all, and it names the wrong party with full "
+                                  "confidence"}),
+             Node(id="alt-tell-the-victim-anyway-hedged", kind="alternative",
+                  name="Still notify the victim, with 'it may have been them' wording",
+                  payload={"why": "a hedged accusation on every concurrent tick is spam, and it "
+                                  "trains the victim to skim the one channel built to be believed. "
+                                  "Silence costs a message; noise costs the channel"}),
+         ]),
+
     Node(id="the-map-is-the-watch-list", kind="decision",
          name="The witness watches the checkouts that were DECLARED — never the folder a session "
               "happens to be sitting in",
