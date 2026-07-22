@@ -1,41 +1,40 @@
-"""Run the ledger's rules, print what is red, and exit non-zero if the gate is.
+"""Run the ledger's rules, report what is red, and say what to do about it.
 
-`nothing-unsound-passes-a-gate` counts the ungrounded params on everything the release gate admits,
-so while a debt is carried and undischarged, this exits 1 — and any pipeline that runs it stops.
-That is the whole difference between a caveat and a gate: prose cannot fire.
+    uv run python -m ledger.check            the gate
+    uv run python -m ledger.check --brief    one line per entry, fattest first
 
-    uv run python -m ledger.check
+THREE OUTCOMES, THREE EXIT CODES, and the distinction is the point:
 
-`quern` is the substrate this is authored against. It is PRIVATE, and deliberately not a dependency of
-this package — transponder is public and its adopters must not need it — so the check runs only where
-someone has put it on the path (`uv pip install -e ../quern`). The test suite's structural rules
-`importorskip` past its absence; this module does not, because a check that silently passes when it
-could not run is worse than one that is missing.
+    0   green — every rule holds and the roll is written
+    1   RED — something unsound is in front of the gate, or an entry left the
+        record without saying so. The ledger is fine; what it records is not
+    2   CANNOT CHECK — quern is missing, the file does not parse, the pinned
+        package is not in the registry. Nothing was judged
 
-**Nothing runs this today, and that is the honest state of it.** The docstring above used to open
-with "This is the brake", and it named a `--group ledger` that has never existed in pyproject.toml
-— so the command as written could not run at all. CI runs `pytest` and nothing else, and it cannot
-run this: `quern` is private and a public runner cannot install it. A gate wired into no pipeline
-brakes nothing. Until that is resolved, this is a thing a human runs on a machine that has the
-substrate, and it should not be described as if it stops a release.
+2 used to be 1, and that cost an afternoon: CI failed with `ledger@0.5.0
+(pinned) is not in the library` and read as a red gate for weeks, when the truth
+was that the workflow cloned a registry that had been renamed. "Unsound" and
+"unchecked" are different facts and a pipeline should be able to tell them apart
+without reading a traceback.
 
-The structural rules (a decision names what it rejected, a hypothesis is falsifiable, a debt states
-how it is discharged) are also checked by the test suite, which stays green while they hold. The
-GATE is deliberately not a unit test: a red gate does not mean the code is broken, it means an
-unsound thing is being carried and has not been paid for. Those are different facts and they should
-fail in different places.
+`quern` is the substrate this is authored against. It is deliberately NOT a
+dependency of this package — transponder is public and its adopters must not
+need it — so the check runs where someone has put it on the path. The test
+suite's structural rules `importorskip` past its absence; this module does not,
+because a check that silently passes when it could not run is worse than one
+that is missing.
+
+The GATE is deliberately not a unit test: a red gate does not mean the code is
+broken, it means an unsound thing is being carried and has not been paid for.
+Those are different facts and they should fail in different places.
 """
 
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
-
-from quern.tree import run_rules
-from quern.roll import audit, write
-
-from ledger import LEDGER
 
 _ROOT = Path(__file__).resolve().parents[1]
 _ROLL = "ledger/roll.json"
@@ -47,8 +46,79 @@ _ROLL = "ledger/roll.json"
 # passes whatever it is handed. CI names the base it is diffing from instead.
 _REV = os.environ.get("LEDGER_ROLL_REV", "HEAD")
 
+# Warn at this fraction of an entry's word budget. Not a rule — a rule that fires
+# late is a rewrite under time pressure, and every entry that went over today went
+# over while being written, not while being planned.
+_WARN_AT = 0.85
 
-def main() -> int:
+
+class CannotCheck(Exception):
+    """The check could not run. NOT the same as the gate being red."""
+
+
+def _load():
+    """Import the substrate and the ledger, turning every "could not run" into one
+    exception with an actionable sentence attached."""
+    try:
+        from quern.roll import audit, write
+        from quern.tree import run_rules, said_words
+    except ModuleNotFoundError as e:
+        raise CannotCheck(
+            f"quern is not on this interpreter's path ({e.name}).\n"
+            f"  The ledger is authored against it. Run through the project venv, or:\n"
+            f"      uv pip install -e ../quern") from e
+    try:
+        from ledger import LEDGER
+    except SyntaxError as e:
+        raise CannotCheck(
+            f"the ledger does not parse — {e.filename}:{e.lineno}: {e.msg}\n"
+            f"  It is Python holding data, so an edit can break it syntactically. "
+            f"Nothing was judged.") from e
+    except ValueError as e:
+        raise CannotCheck(
+            f"the ledger could not be composed — {e}\n"
+            f"  If that names a PINNED package, the registry does not carry it: check "
+            f"QUERN_REGISTRY\n"
+            f"  (default ../quern-registry, which is a checkout of xag/fleet-registry).") from e
+    return LEDGER, run_rules, said_words, audit, write
+
+
+def _limit(tree) -> int | None:
+    """The word budget, read off the rules rather than restated here — a warning
+    that disagrees with the rule it is warning about is worse than no warning."""
+    for rule in tree.rules:
+        if m := re.search(r"said_words\(self\)\s*<=\s*(\d+)", getattr(rule, "expr", "") or ""):
+            return int(m.group(1))
+    return None
+
+
+def _crowded(tree, said_words, limit: int) -> list[tuple[str, int]]:
+    """Entries close enough to the budget that the next edit will breach it."""
+    out = []
+    for path, _ in tree.walk(""):
+        if "/" in path:
+            continue
+        words = said_words(tree, path)
+        if words >= limit * _WARN_AT:
+            out.append((path, words))
+    return sorted(out, key=lambda e: -e[1])
+
+
+def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    try:
+        LEDGER, run_rules, said_words, audit, write = _load()
+    except CannotCheck as e:
+        print(f"CANNOT CHECK — {e}")
+        print("\nNothing was judged, so this is not a verdict on the ledger.")
+        return 2
+
+    if "--brief" in argv:
+        from quern.brief import brief
+
+        print(brief(LEDGER, fat=True))
+        return 0
+
     results = run_rules(LEDGER)
     failures = [r for r in results if not r.ok]
     # A tombstone with no `was` excuses nothing - the right way round, because
@@ -73,8 +143,17 @@ def main() -> int:
     # rewrite, because rewriting it then would launder what the check just caught.
     if not removals:
         write(LEDGER, _ROOT / _ROLL)
+
+    if (limit := _limit(LEDGER)) and (crowded := _crowded(LEDGER, said_words, limit)):
+        print()
+        print(f"CROWDED — within {int(_WARN_AT * 100)}% of the {limit}-word budget. Tighten "
+              f"before adding, not after:")
+        for path, words in crowded:
+            print(f"  {words:4d}/{limit}  {path}")
+        print("  `--brief` sorts every entry by weight; the first line is the first to cut.")
+
     if not failures and not removals:
-        print(f"green - {len(results)} rules, nothing unsound in front of the "
+        print(f"\ngreen - {len(results)} rules, nothing unsound in front of the "
               "gate; roll written")
         return 0
 
@@ -90,9 +169,10 @@ def main() -> int:
         print(f"{len(removals)} entr(y/ies) left the record without saying so.")
         print("Reversed is superseded and the node STAYS; paid is discharged and")
         print("the node STAYS; only an entry that was never valid is retracted,")
-        print("with a tombstone naming it. The eight [SUPERSEDED] decisions here")
-        print("are kept on purpose - that sequence IS the finding.")
+        print("with a tombstone naming it. Each GONE line above carries the digest")
+        print("to paste if only the wording moved: meta['amended'] = '<digest> <why>'.")
     return 1
+
 
 if __name__ == "__main__":
     sys.exit(main())
