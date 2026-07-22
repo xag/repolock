@@ -1653,6 +1653,10 @@ def build() -> Quern:
     # COMMITTED, not ignored: the package travels as data in the repo itself, verified
     # against quern.lock's digests at every load, and the check still simply skips where
     # quern (the Python) is not installed. A registry, when reachable, only refreshes it.
+    # Default to a SIBLING CHECKOUT of the registry, and note that the directory name is not the
+    # repo name: this is xag/fleet-registry, cloned as ../quern-registry on the author's machine.
+    # That mismatch is exactly how CI stayed broken — the workflow cloned xag/quern-registry, which
+    # still exists, still resolves, and is frozen at ledger@0.4.1.
     lib, refs = consume(_ROOT, os.environ.get("QUERN_REGISTRY", _ROOT.parent / "quern-registry"))
 
     quern = Quern(packages=[next(r for r in refs if r.name == "ledger")])

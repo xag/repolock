@@ -58,8 +58,13 @@ jobs:
             exit 1
           fi
 
+      # xag/fleet-registry, NOT xag/quern-registry. The registry moved and publishes went to the new
+      # repo; the old one is still public and still resolves, frozen at ledger@0.4.1. So cloning it
+      # succeeded, and the gate died on `ledger@0.5.0 (pinned) is not in the library` from the moment
+      # this project repinned — a stale URL that fails like a missing package rather than like a
+      # wrong address.
       - name: Fetch the registry the lock pins against
-        run: git clone --depth 1 https://github.com/xag/quern-registry "$RUNNER_TEMP/registry"
+        run: git clone --depth 1 https://github.com/xag/fleet-registry "$RUNNER_TEMP/registry"
 
       # In CI the commit under judgement IS HEAD and carries the roll written beside it, so
       # comparing against HEAD compares the tree with itself and passes whatever it is handed.
