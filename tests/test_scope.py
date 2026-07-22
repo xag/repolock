@@ -142,6 +142,63 @@ def test_the_agent_whose_region_was_written_is_told_on_its_next_call(repo):
         "redelivered — a note repeated on every call is a note that stops being read")
 
 
+def test_a_channel_message_is_pulled_and_a_direct_one_is_pushed(repo):
+    """The line between a courier and a feed, and the whole reason this stays a transponder: chat
+    and the violation alarm share one delivery path, so an agent trained to skim the channel skims
+    the alarm with it. Direct is pushed. Channel and broadcast wait to be asked for."""
+    from transponder import messages
+
+    dirs(repo, "api")
+    declare(repo, "A", ["api/**"], intent="the rate limiter")
+
+    messages.send(sender="B", body="rewriting the auth middleware return type", kind="channel",
+                  repo=repo)
+    messages.send(sender="B", body="you asked for api/** — free in ten minutes", kind="direct",
+                  repo=repo, to="A")
+
+    pushed = claude_shell(repo, "A", "cat a.txt")
+    assert "free in ten minutes" in pushed.pre_stdout, "a direct message was not delivered"
+    assert "auth middleware" not in pushed.pre_stdout, (
+        "channel traffic was pushed — that is how the alarm becomes wallpaper")
+
+    pulled = messages.unread("A", repo, kinds=("direct", "channel", messages.BROADCAST))
+    assert any("auth middleware" in m["body"] for m in pulled), "the channel was not readable at all"
+
+
+def test_reading_clears_a_message_for_you_and_leaves_it_for_everyone_else(repo):
+    """A queue that deletes on read cannot serve two addressees. Per-reader seen-sets are what make
+    a pull non-destructive — the user's correction, and it is what lets a channel exist at all."""
+    from transponder import messages
+
+    dirs(repo, "api")
+    messages.send(sender="C", body="moving the schema at 15:00", kind="channel", repo=repo)
+
+    first = messages.unread("A", repo, kinds=("channel",))
+    assert len(first) == 1
+    assert not messages.unread("A", repo, kinds=("channel",)), "redelivered to the reader"
+    assert len(messages.unread("B", repo, kinds=("channel",))) == 1, (
+        "one agent's read deleted the message for everyone else")
+
+
+def test_the_holder_is_told_that_someone_wanted_its_region(repo):
+    """A conflict was computed and answered to the ASKER only, so an agent sitting on a wide scope
+    never learned anyone was queued behind it — the same one-sided delivery as the violation report.
+    Deduped, because a retrying agent must not become a siren."""
+    from transponder import messages, server
+
+    dirs(repo, "api")
+    declare(repo, "A", ["api/**"], intent="the rate limiter")
+
+    for _ in range(3):
+        server.declare_scope(repo, ["api/handlers/**"], "B", "adding a handler")
+
+    got = messages.unread("A", repo, kinds=("direct",), mark=False)
+    wanted = [m for m in got if "SOMEONE WANTS YOUR REGION" in m["body"]]
+    assert wanted, "the holder was never told anyone asked for its region"
+    assert len(wanted) == 1, f"a retrying asker became a siren: {len(wanted)} notices"
+    assert "agent B" in wanted[0]["body"] and "adding a handler" in wanted[0]["body"]
+
+
 def test_a_session_parked_on_a_question_is_told_on_the_way_back_in(repo):
     """A victim that has stopped to ask its human something makes no tool calls, so mail addressed
     to it waits until it writes again — one call too late. UserPromptSubmit is where it is reached,

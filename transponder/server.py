@@ -94,9 +94,39 @@ def declare_scope(repo: str, scope: list[str], session_id: str, intent: str = ""
             out.append(f"    overlap: {', '.join(c['intersection'])}   <- subtract exactly this")
     if v.get("free_hint"):
         out.append(f"\nFREE RIGHT NOW: {', '.join(v['free_hint'])}")
-    out.append("\nNothing is blocking you, but their region is their half-finished work. Take a "
-               "narrower scope and carry on, or file an issue for the part you cannot have.")
+    # The holder is told someone wanted its region, which nobody used to be. A conflict was computed
+    # and answered to the ASKER only — the same one-sided delivery as the violation report — so an
+    # agent sitting on `**` for an hour never learned anyone was queued behind it. That is the
+    # difference between finishing carefully and finishing SOON, and between holding a wide scope
+    # and narrowing it. Deduped per (asker, holder, repo): a retrying agent must not become a siren.
+    _tell_the_holders(repo, session_id, intent, v["conflicts"])
+    out.append("\nNothing is blocking you, and the holders have been told you asked. Take a narrower "
+               "scope and carry on, or say what you need and when — send_message(...) — and they can "
+               "tell you when it frees.")
     return "\n".join(out)
+
+
+def _tell_the_holders(repo: str, asker: str, intent: str, conflicts: list[dict]) -> None:
+    from transponder import env, messages
+
+    for c in conflicts:
+        holder = c.get("session")
+        if not holder or holder == asker:
+            continue
+        recent = [m for m in messages.unread(holder, repo, kinds=("direct",), mark=False)
+                  if m.get("from") == "transponder" and asker in m.get("body", "")
+                  and env.now() - m.get("at", 0) < 600]
+        if recent:
+            continue                      # they already have this letter and have not read it yet
+        messages.send(
+            sender="transponder", kind="direct", repo=repo, to=holder,
+            body=(f"SOMEONE WANTS YOUR REGION — agent {asker} asked for "
+                  f"{', '.join(c.get('intersection') or c.get('scope') or [])}"
+                  + (f", to: {intent}" if intent else "")
+                  + ".\n  They were told it is yours and are working around it. Nothing is waiting "
+                    "on you and nothing is blocked — but if you are done with that part, "
+                    "release_scope(drop=[...]) frees it, and a one-line reply "
+                    "(send_message) tells them when to expect it."))
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, idempotentHint=True))
@@ -139,6 +169,82 @@ def scopes(repo: str) -> str:
     """Who is working this checkout and where, plus the tree's state. Call it BEFORE you plan:
     it is how you pick work that will not land in the middle of someone else's."""
     return _fmt_scopes(repo)
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, idempotentHint=False))
+def send_message(repo: str, session_id: str, body: str, to: str = "", everyone: bool = False) -> str:
+    """**Say what you are doing, in one or two lines, so the agent beside you can write code that
+    survives it.**
+
+    Send this the moment your work would surprise someone reading the same checkout — you are about
+    to rewrite an interface, move a module, change a schema, or you are partway through something
+    that will look broken if they read it now. The map already says WHERE you are writing; it cannot
+    say what you are DOING, and that is the part that changes what someone else should write. "I am
+    replacing the auth middleware's return type this hour" lets the agent next door write the caller
+    once, for the new shape, instead of twice.
+
+    You are not rivals. Two agents in one checkout are building one app for one person.
+
+    Addressing, and it is deliberate that only one of these interrupts anybody:
+
+        (default)        the CHANNEL for this checkout — everyone working `repo` can read it
+        to="<session>"   DIRECT to one agent. The only kind PUSHED into its context; use it when
+                         a specific agent needs to know, e.g. answering someone who asked for your
+                         region, or telling a holder when you will be done
+        everyone=True    BROADCAST to every agent on this machine. Rare — cross-repo news only
+
+    Channel and broadcast are PULL-ONLY: they wait until someone calls `messages()`. That is on
+    purpose. Your note shares a delivery path with the scope-violation alarm, and an agent trained
+    to skim the channel skims the alarm with it — so this stays a transponder, not a chat room.
+
+    THERE IS NO WAKE-UP. Nothing can interrupt a running agent, so a reply arrives when the other
+    side next fires a hook, or never, if it has finished. Write letters, not handshakes: "I will need
+    api/** when you are done" is well carried; "reply before I continue" will hang forever.
+
+    Your identity and the scope you currently hold are stamped on automatically, so a claim you make
+    about the map can be checked against the map.
+    """
+    from transponder import messages
+
+    kind = "direct" if to else ("broadcast" if everyone else "channel")
+    v = messages.send(sender=session_id, body=body, kind=kind, repo=repo, to=to)
+    if v["status"] == "empty":
+        return "Nothing sent — the message was empty."
+    if v["status"] != "sent":
+        return "Could not send (the mail directory is not writable)."
+    if kind == "direct":
+        return (f"Sent to agent {to}. It lands in their context on their next tool call, or on "
+                f"their human's next prompt — not before. Do not wait for a reply.")
+    where = "every agent on this machine" if kind == "broadcast" else "agents working this checkout"
+    return (f"Posted to {where}. They will see it when they call messages() — it is not pushed. "
+            f"If one specific agent needs to know, send it direct as well.")
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, idempotentHint=False))
+def messages(repo: str, session_id: str, keep_unread: bool = False) -> str:
+    """**Ask what you have not been told.** Everything addressed to you, to this checkout, or to the
+    machine, that you have not already seen — oldest first.
+
+    Worth calling at the moments the hooks cannot cover: before you plan a big change, when you come
+    back to a checkout you left, and when you are about to do something delicate or slow. Direct
+    messages are pushed to you anyway; the CHANNEL and BROADCAST traffic is only ever here, because
+    serving a feed on every tool call is how an alarm becomes wallpaper.
+
+    Reading is not destructive to anyone else — a message is marked read for YOU and stands for
+    whoever else it was addressed to. `keep_unread=True` looks without marking.
+    """
+    from transponder import messages as mail
+
+    got = mail.unread(session_id, repo, kinds=("direct", "channel", mail.BROADCAST),
+                      mark=not keep_unread)
+    if not got:
+        return ("Nothing unread. (Channel and broadcast messages only ever arrive here, so this is "
+                "the whole of what anyone has said.)")
+    out = [f"{len(got)} message(s):", ""]
+    out += [mail.render(m) + "\n" for m in got]
+    if keep_unread:
+        out.append("(left unread — they will be offered again)")
+    return "\n".join(out)
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))

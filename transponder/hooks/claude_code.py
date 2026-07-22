@@ -56,7 +56,8 @@ WRITING_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 # registered under any name). Skipped entirely: they operate on ~/.transponder, never on a working
 # copy, so there is nothing for the witness to see and no reason to spend two git calls looking.
 OUR_MCP_TOOLS = {"lock_drift", "lock_disable", "lock_enable", "lock_switch",
-                 "declare_scope", "extend_scope", "release_scope", "scopes"}
+                 "declare_scope", "extend_scope", "release_scope", "scopes",
+                 "send_message", "messages"}
 
 
 def _skipped_mcp(tool: str) -> bool:

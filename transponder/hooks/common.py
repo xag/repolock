@@ -33,13 +33,14 @@ import json
 import os
 import subprocess
 
-from transponder import env, scope, witness
+from transponder import env, messages, scope, witness
 
 SEEN_DIR = "seen"            # per-(session, repo): the last HEAD this session saw — the drift check
 SNAP_DIR = "snap"            # ...and the witness's before-picture for the tool now running
 NOTED_DIR = "noted"          # ...and whether the courier already introduced this shared checkout
 WARNED_DIR = "warned"        # ...and whether we already said the witness's settle half is missing
-INBOX_DIR = "inbox"          # ...and notes left FOR an agent by someone who wrote in its region
+# (an INBOX_DIR lived here for one afternoon; mail moved to transponder.messages, which addresses
+#  three ways and marks read per reader instead of deleting for everyone)
 
 
 def repo_root(cwd: str) -> str | None:
@@ -120,38 +121,20 @@ def post(victim: str, repo: str, note: str) -> None:
     have been there instead of observing it — and it made the offender write into the region again
     to do it, tripping the alarm a second time on an agent that was complying.
 
-    Appended, not overwritten: two agents can land on one victim before it next runs, and the second
-    note must not erase the first. Drained by collect() on the victim's next tool call.
+    Carried by transponder.messages as a DIRECT message from `transponder` itself, rather than by a
+    store of its own. One substrate: the violation report and an agent's own "I am about to rewrite
+    the auth middleware" travel the same route, are marked read the same way, and cannot drift apart
+    in behaviour. It is also why reading stopped being destructive — a per-reader seen-set clears a
+    message for the agent that read it and leaves it standing for anyone else it was sent to.
     """
-    line = json.dumps({"at": env.now(), "note": note})
-    try:
-        with open(_memo_path(INBOX_DIR, victim, repo), "a", encoding="utf-8") as f:
-            f.write(line + "\n")
-    except OSError:
-        pass
+    messages.send(sender="transponder", body=note, kind="direct", repo=repo, to=victim)
 
 
 def collect(session: str, repo: str) -> list[str]:
-    """Take delivery of what was left for this agent, once. Read-and-delete, because a note
-    redelivered on every call is a note that stops being read."""
-    try:
-        with open(_memo_path(INBOX_DIR, session, repo), encoding="utf-8") as f:
-            raw = f.read()
-    except OSError:
-        return []
-    _forget(INBOX_DIR, session, repo)
-
-    out = []
-    for line in raw.splitlines():
-        if not line.strip():
-            continue
-        try:
-            item = json.loads(line)
-        except (json.JSONDecodeError, ValueError):
-            continue
-        ago = max(0, int(env.now() - item.get("at", 0)))
-        out.append(f"{item.get('note', '')}\n  (left {ago}s ago — the tree may have moved again since)")
-    return out
+    """Take delivery of what was addressed TO this agent — direct only, which is the whole line
+    between the courier and a feed. Channel and broadcast traffic is never pushed; an agent that
+    wants the room calls `messages()` and asks."""
+    return [messages.render(m) for m in messages.unread(session, repo, kinds=("direct",))]
 
 
 def remember_head(session: str, repo: str, head: str | None) -> None:
@@ -199,6 +182,14 @@ def shared_note(repo: str, session: str) -> str | None:
         "Nothing is blocked. But their regions are their half-finished work: stay out of them, and",
         "SAY WHERE YOU WILL WRITE so they can stay out of yours:",
         "    declare_scope(repo, ['src/thing/**', 'tests/thing/**'], intent='what you are doing')",
+        "",
+        "AND SAY WHAT YOU ARE DOING, in a line or two — you are all building one app for one",
+        "person, and the map can only say where you are, never what is coming:",
+        "    send_message(repo, session_id, 'replacing the auth middleware return type this hour')",
+        "That is what lets them write the caller once, for the shape it is about to have, instead",
+        "of writing it twice. `messages(repo, session_id)` is how you hear theirs — it is pulled,",
+        "never pushed, so ask before you plan anything large.",
+        "",
         "Check `scopes(repo)` before planning. Reserve `.git/index` around a commit and release it",
         "after — `git add -A` sweeps up every dirty file in the checkout, including theirs.",
     ]
