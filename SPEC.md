@@ -2,9 +2,9 @@
 
 One developer, several AI agent sessions, one machine of shared checkouts. Git assumes a working
 tree has one author; agent harnesses pretend that is still true. This convention is the missing
-**information layer**: a claims map any agent on the machine can read and write, a witness that
-reports what actually happened, and a courier that carries both into every agent's context —
-regardless of vendor.
+**information layer**: a claims map any agent on the machine can read and write, a channel they can
+talk on, and a protocol for asking before writing — regardless of vendor. It has no enforcement and,
+since v2.1, no detection either: the agreement happens before the work (§4).
 
 This document is normative. The Python package in this repository is a reference implementation,
 not the definition. **MUST/SHOULD/MAY** as in RFC 2119.
@@ -16,25 +16,27 @@ not the definition. **MUST/SHOULD/MAY** as in RFC 2119.
 
 ## 0. The model, in four sentences
 
-Agents **declare** where they will write; the declarations form a map, and the map never
-double-books a region. The **courier** delivers what an agent cannot see from inside its own
-context: who else is here, and that the file it is about to edit is inside someone's region. The
-**witness** observes every write and reports, loudly and with the remedy attached, the ones that
-land in another agent's region. **Nothing is ever refused** — the failure this convention prevents
-was never malice, it was an agent that did not know another agent was there, and information cures
-ignorance at a fraction of the price of a mutex.
+An agent **asks** what is going on, **declares** where it will write and what it is doing, and
+**waits for the green light that declaring returns**. The declarations form a map, and the map never
+double-books a region. The **courier** delivers, opportunistically and without any guarantee, what
+an agent cannot see from inside its own context. **Nothing is ever refused** — the failure this
+convention prevents was never malice, it was an agent that did not know another agent was there.
+
+**The agreement happens before the work, or it does not happen.** There is no detection: nothing
+observes writes, and a collision is neither prevented nor reported. That is not an omission, it is
+§4.
 
 ### 0a. Why cooperation is a sound foundation, not a hope
 
 Every agent on the machine works for the same human, who wants all of their work to survive. There
 is no adversary to model — and **deterrence is explicitly not the mechanism** (an agent has no
 memory across sessions, no reputation, no future to lose; "they risk being stomped back" is a hope,
-not an argument). The mechanism is *visibility plus a witness*: an agent that can see the other
-scopes has no reason to collide, and one that collides anyway is named immediately, rather than
-discovered a week later inside a mangled rebase.
+not an argument). The mechanism is *visibility before the fact*: an agent that
+can see the other scopes has no reason to collide, and one that asks before it writes will not.
 
-If this assumption is wrong, the convention is wrong — and the kill condition is mechanical:
-violation reports firing regularly, from agents that had seen the map (§8).
+If this assumption is wrong, the convention is wrong, and there is no longer a backstop that will
+tell you — see §4. The kill condition is now the one thing still observable: agents that were shown
+the map and declared nothing.
 
 ## 1. The namespace is the local filesystem
 
@@ -56,8 +58,10 @@ One namespace, deliberately:
 - **general globs** (`src/*.py`) have no decidable overlap and MUST be rejected at declaration. A
   scope system unsure whether two regions touch hands one region to two agents and tells each it
   is alone.
-- **opaque names** (`port:3000`) are contracts no witness can check, and MUST be rejected until
-  one arrives *with* a witness.
+- **opaque names** (`port:3000`) name nothing the overlap relation can reason about, and MUST be
+  rejected. Two spellings of one resource would read as disjoint, both be granted, and the
+  collision would land in the world with the map reporting calm — and since §4 there is nothing
+  downstream that would ever notice.
 - **aliasing is dead by construction**: case, symlinks, junctions, `..` all canonicalise to one
   string, so "whom do we inform?" is always answerable point-to-point from the map. Nothing is
   ever broadcast.
@@ -77,8 +81,9 @@ anything but a file.** An agent that intends to commit SHOULD reserve `<repo>/.g
 ordinary path with the ordinary overlap — immediately before the commit, and release it
 immediately after. Held for the life of a scope it makes every writer conflict with every other,
 which is the old mutex rebuilt; taken briefly, commits serialise by consent and nobody parsed
-anything. The witness backstops the agent that doesn't: a commit that swept another agent's paths
-is named, sha and all, with the recovery attached (§5).
+anything. Nothing backstops the agent that doesn't: a `git add -A` that sweeps a neighbour's
+half-finished work into your commit is the founding incident of this convention, and it is now
+prevented only by reserving the index — not detected afterwards (§4).
 
 ## 2. The claims map
 
@@ -100,62 +105,71 @@ is named, sha and all, with the recovery attached (§5).
   blocks; `release` narrows or clears. Since nothing ever waits on anything, deadlock does not
   exist in this convention — there is nothing to cycle on.
 
-## 3. The courier
+## 3. Asking, and the courier
 
-An agent turn cannot be interrupted and nothing can push into it. Two delivery paths exist, and
-they are the only two:
+**The protocol is pull-first, and that is the whole design.** An agent turn cannot be interrupted
+and nothing can reliably push into it, so anything an agent must know before it acts, it has to ask
+for. Four steps, and an adapter MUST teach all four:
 
-- **a working agent**: the adapter prints into its context on every tool call. This is how all
-  notes below arrive;
-- **a parked agent**: reachable when it next works. (A subscribe-able listener — the old waiter,
-  generalised — MAY be added when negotiation between live agents needs it; nothing below depends
-  on it.)
+1. **ask** — `channel(repo, session_id, path?)`: who is working here, narrowed to the path you mean
+   to touch, plus everything waiting for you. Nothing is pushed reliably; asking is how you find out;
+2. **declare** — `declare_work(repo, session_id, paths, doing, minutes)`: where you will write, what
+   you are doing, roughly how long. **It returns a green light, or it does not**, and an agent waits
+   for it before editing a shared checkout;
+3. **not clear** — take different work, go back to the human, or wait. An agent SHOULD say which it
+   chose, and waiting SHOULD be a background process that exits when the region frees, because a
+   harness noticing a background task exit is the only thing that can wake an agent;
+4. **finish** — `finish_work()` the moment the region stops being yours. A map that says you are
+   working where you are not makes the next agent wait for nothing.
 
-The courier MUST deliver:
+`doing` and `minutes` carry what the map alone cannot: what is *coming*, and when to come back.
+`minutes` is advisory — liveness remains the lease, so an optimistic estimate cannot squat a region
+past the point where anyone can tell whether the agent is alive.
 
-1. **the introduction**, once per (session, checkout): who else is working here and where, and how
-   to get on the map. Once — a note printed forever is a note nobody reads;
-2. **the drift note** (§6), when history moved under what the session remembers.
+The **courier** is what is left of push, and it promises nothing. When a hook happens to fire, it
+hands over: the **introduction**, once per session — who is on this machine, and the four steps
+above — and the **drift note** (§6). Delivery is best-effort by construction, and no part of this
+convention may depend on a note arriving.
 
-The courier MUST NOT promise a warning *before* a declared write. This spec used to require one —
-"information at its most valuable moment" — and it was built, and that moment does not exist. A
-hook reaches an agent before its tool runs only by refusing the call, which §7 forbids; context
-attached to a pre-tool hook is delivered beside the TOOL RESULT, after the write has landed. A
-declared write is therefore witnessed exactly like a shell (§4), and the wording says so.
+The courier MUST NOT promise a warning *before* a write. That was required here once, and built,
+and the moment does not exist: a hook reaches an agent ahead of its tool only by refusing the call,
+which §7 forbids, and context attached to a pre-tool hook is delivered beside the TOOL RESULT. The
+only text that reliably reaches an agent before it acts is what it asked for, and the harness's
+own prompt-submit channel.
 
-What genuinely arrives before a write is not the courier's at all: the `declare_scope` answer,
-which names any conflicting holder synchronously, and the introduction above — both of which reach
-the agent through channels that do put text in front of it.
+## 4. There is no witness
 
-A participant writing *unclaimed* ground is TOLD, and asked to declare it. Its claim MUST NOT be
-extended on its behalf: a map that grows behind the back of the agent whose name is on it attributes
-to that agent something it never said.
+Earlier drafts of this spec required one: fingerprint the checkout before a tool call and after,
+and report anything that moved inside another agent's region. It is deleted, and the reason is not
+cost.
 
-## 4. The witness
+**A fingerprint proves the tree MOVED. It cannot prove who moved it.** With one agent that
+distinction never surfaces. With two — the only case this convention exists for — it is the normal
+case: an agent appending to its own declared file, and a passer-by whose tool call merely lasted
+longer than the gap between two of those appends, produce *the same picture from outside*. Built
+and run, it named a reader as the author of writes it never made, four times in one afternoon, and
+told the holder its work had been trampled by an agent that never wrote a byte.
 
-For every tool whose effect is not declared (a shell, an MCP call), the adapter MUST take a
-fingerprint of the checkout before the call (HEAD + porcelain + the stat of every dirty path — the
-stat is load-bearing: an already-dirty file edited again moves no status line, but the bytes move)
-and diff it after. A **moved fingerprint names the paths that were written, as a fact**. Commits
-are chased into the object graph (`git log --name-only`): a file created and committed inside one
-tool call is dirty at neither end, and it is precisely the file that matters (§1a).
+Two attempts to bridge the gap were made and both were guesses wearing an observation's clothes:
+grading by whether the region's owner had recently renewed ("they were awake, so probably them"),
+and its complement ("nobody else was awake, so probably you"). Renewal proves an agent was awake.
+It says nothing about who touched a file.
 
-- unmoved (almost every call): nothing is said, nothing is charged;
-- moved, inside the writer's own scope: silent, lease renewed;
-- moved, outside every claim: a nudge to declare it (participants only);
-- moved, **inside another agent's region**: a violation (§5).
+So an adapter MUST NOT report authorship it cannot establish. The only writes with an author are
+those a harness *declares* — a tool whose input names the file it will write — and a convention
+built on that alone is a convention that reports almost nothing. It is therefore built on the other
+side of the moment instead: **the agreement, before the work.**
 
-Known limits, stated rather than hidden: a backgrounded task's writes land after its hook window
-and are attributed to nobody; the witness sees only what git tracks; and between one session's
-Post and its next Pre, another process's writes are that process's to witness, not this one's.
+What replaces detection:
 
-## 5. Violations
+- an agent that suspects something changed under it **asks** (§3) and can message whoever it finds;
+- the drift check (§6), which asks about the *reader's own* stale picture and never about anyone
+  else's writes — the one observation here that was never wrong;
+- the recording (flight-recorder), for the human afterwards.
 
-A violation is not prevented — nothing is — so it MUST NOT be silent. The report goes to the agent
-that wrote, immediately, and MUST carry: the paths, the victim, the victim's intent, and **the
-remedy**. Where HEAD moved (their work is inside your commit), the remedy is exact — `git reset
---soft HEAD~1`, unstage their paths, stage yours **by name, never `-A`** — because a commit is the
-one violation that is cleanly recoverable, and an accusation without a recovery is half a message.
+**Knowingly given up:** a write into a declared region is lost work that neither party is told
+about. The whole weight now rests on agents asking first, which is a behavioural bet stated in §0a
+and no longer hedged by anything.
 
 ## 6. The drift check
 
@@ -167,21 +181,19 @@ it at session start and on each return of control.
 ## 7. Adapter obligations
 
 1. **never refuse a tool call.** The one permitted exit-2 is the Stop boundary (obligation 6);
-2. deliver the courier's three notes (§3) and the witness's reports (§4, §5) through the harness's
-   own channel into the agent's context;
-3. key claims and witness on facts, **never on the session's cwd**. Two sources, and no third: for
-   a tool whose input names the file it will write, the repo that owns *that path*; for everything
-   else, **the checkouts that are on the map** — the ones somebody declared. An adapter MUST NOT
-   pick a checkout from where the session happens to be sitting. That is a prediction of the same
-   family as reading a command to guess what it writes (§7a), and it fails the same way: an agent
-   in one checkout shelling a write into another is witnessed against the wrong tree, which reports
-   `nothing moved` and is believed. A checkout nobody declared is not watched, and that costs
-   nothing that was ever protected — a violation exists only against a claim;
-4. cover **every shell the harness exposes** and its MCP traffic in the witness's matchers — a
-   tool the witness does not see is a write that never happened;
-5. detect its own blind half: a before-picture that is never settled means the after-hook is not
-   wired, and the adapter MUST say so, once, rather than let anyone believe they are covered;
-6. at the Stop boundary: release the session's claims in that checkout against a clean tree; if
+2. **teach the four steps of §3** in the introduction, and expose them as tools an agent can call.
+   The instruction is the mechanism now: there is no detection behind it to catch what it fails to
+   convey;
+3. deliver the courier's notes through the harness's own channel into the agent's context — and
+   claim nothing about delivery. Best-effort is the contract;
+4. key everything on facts, **never on the session's cwd**: a tool's own declared file path, or the
+   checkouts on the map. An adapter MUST NOT infer which checkout a call is about from where the
+   session happens to be sitting — that is a prediction of the same family as reading a command to
+   guess what it writes (§7a), and it failed the same way, silently, for as long as it existed;
+5. **report no authorship it cannot establish** (§4). An adapter MUST NOT tell an agent it wrote
+   something, or tell a third party who wrote it, on the strength of a tree that changed while a
+   call was running;
+6. at the Stop boundary: release the session's claims, in every checkout it declared, against a clean tree; if
    the tree is dirty and the session was a participant there, it MAY block the stop **exactly
    once** to ask for commit / ignore / stash — three routes, because "commit your work" is the
    wrong instruction for an artifact and for a scrap. Asked once and declined, the claims stay on
@@ -212,10 +224,10 @@ Falsifiable, off the tape, and each one cheap:
 
 | the claim | what kills it |
 |---|---|
-| agents contain their work once containment is visible | violation reports firing regularly from agents that had seen the map |
-| the map is used at all | checkouts shared for days with zero declarations — the notes are being ignored, and this is decoration |
-| the witness sees every write that matters | a tape whose settle shows an unmoved fingerprint across a call after which `git status` differs |
-| information suffices — the loss of exclusion was affordable | an out-of-scope write destroying work that `git revert` could not bring back. **One** is enough; that is the outcome the deleted mutex existed to prevent, and it would mean the trade was wrong rather than merely cheap |
+| agents ask before they write, once asking is cheap and taught | a checkout shared for days with zero declarations — the instruction is being ignored, and this is decoration |
+| a green light is worth waiting for | agents that declare, are told NOT CLEAR, and write anyway. Observable only from the tape and only for declared writes, which is a weaker instrument than v2 had, and that is the price of §4 |
+| information suffices — the loss of exclusion was affordable | an out-of-scope write destroying work that `git revert` could not bring back. **One** is enough |
+| **and this one has no instrument at all** | with detection deleted, a collision that nobody notices leaves no trace anywhere. If this design fails, it will fail silently — which is why §4 states the bet rather than burying it |
 
 ## Non-goals
 

@@ -777,6 +777,64 @@ DECISIONS = [
                                   "inception, bought for one grade of confidence"}),
          ]),
 
+    Node(id="agree-before-the-work", kind="decision",
+         name="Delete detection entirely: ask, declare, wait for the green light, finish",
+         links={"supersedes": ["nobody-is-named-unless-the-tool-named-the-file"]},
+         payload={"rationale":
+                  "The witness is gone. Not narrowed again — deleted, with snapshot, "
+                  "written_between, violations, stray, watch, settle, the violation and intrusion "
+                  "messages, the blind-witness warning and PostToolUse. 698 lines out, 314 in.\n\n"
+                  "The argument was conceded twice in one day: a fingerprint proves the TREE MOVED "
+                  "and cannot say who moved it. What survived the honest correction was a message "
+                  "saying 'something changed near you, and only you know whether it was you' — a "
+                  "fact the agent already had. A detector that can only tell you what you already "
+                  "know is not weakened, it is an elaborate way of saying nothing, and it cost a "
+                  "git fingerprint of every claimed checkout on every tool call.\n\n"
+                  "So the weight moves to the only moment when anybody actually knows what is about "
+                  "to happen: BEFORE. `channel()` asks what is going on, narrowed to the path you "
+                  "mean to touch. `declare_work(paths, doing, minutes)` returns a GREEN LIGHT or "
+                  "names who holds the overlap, what they are doing, when they expect to be free, "
+                  "and what is open right now. Not clear means three named choices — other work, "
+                  "your human, or wait — and waiting is a background process that exits when the "
+                  "region frees, because a harness noticing a background task end is the only thing "
+                  "that can wake an agent. `finish_work()` the moment you are done.\n\n"
+                  "`doing` and `minutes` are why this is not the old map with better manners: the "
+                  "map could only say WHERE, and what changes another agent's code is knowing what "
+                  "is COMING, and when to come back.\n\n"
+                  "The instruction IS the mechanism now, and nothing sits behind it to catch what "
+                  "it fails to convey. If agents do not ask, this is decoration.\n\n"
+                  "KNOWINGLY GIVEN UP, and this is the biggest thing this project has ever put "
+                  "down: a write into a declared region is lost work that NEITHER party is told "
+                  "about. Worse, the instrument that would have shown the design failing went with "
+                  "it — §8's kill conditions used to include violation reports firing, and now a "
+                  "collision nobody notices leaves no trace anywhere. If this fails, it fails "
+                  "silently. That is written into SPEC §4 and §8 rather than left for someone to "
+                  "discover."},
+         children=[
+             Node(id="alt-keep-the-narrowed-witness", kind="alternative",
+                  name="Keep the honest version: report 'a region you do not hold changed while "
+                       "your call was running'",
+                  payload={"why": "what it superseded, and it is true, and it is useless. The only "
+                                  "party told is the one party that already knows whether it wrote. "
+                                  "It bought that with a git fingerprint of every claimed checkout "
+                                  "on every tool call, and with a message agents must learn to "
+                                  "ignore because most of the time it is about somebody else's "
+                                  "work"}),
+             Node(id="alt-os-level-detection", kind="alternative",
+                  name="Get real attribution from the operating system and keep detecting",
+                  payload={"why": "the only way detection could have been kept honestly, and it is "
+                                  "a per-platform audit daemon — the supervised background service "
+                                  "protocol-not-process refused at inception, now bought for a "
+                                  "backstop rather than for the protocol itself"}),
+             Node(id="alt-block-until-green", kind="alternative",
+                  name="Make the green light binding — refuse tool calls until an agent has one",
+                  payload={"why": "it would make the protocol self-enforcing instead of resting on "
+                                  "a behavioural bet, and it is v1, exactly, arrived at from the "
+                                  "other direction. information-not-exclusion gave up exclusion "
+                                  "knowingly; taking it back the moment the informer got quiet is "
+                                  "taking it back"}),
+         ]),
+
     Node(id="nobody-is-named-unless-the-tool-named-the-file", kind="decision",
          name="One grade of attribution, not three: a declared path has an author, and everything "
               "else is 'this changed while you ran'",

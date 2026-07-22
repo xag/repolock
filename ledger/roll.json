@@ -55,6 +55,26 @@
     "digest": "fcfca45ed9c1"
   },
   {
+    "path": "agree-before-the-work",
+    "kind": "decision",
+    "digest": "2a19e554911a"
+  },
+  {
+    "path": "agree-before-the-work/alt-block-until-green",
+    "kind": "alternative",
+    "digest": "1198988f9737"
+  },
+  {
+    "path": "agree-before-the-work/alt-keep-the-narrowed-witness",
+    "kind": "alternative",
+    "digest": "b40f6eb64ff0"
+  },
+  {
+    "path": "agree-before-the-work/alt-os-level-detection",
+    "kind": "alternative",
+    "digest": "379ae99a2cde"
+  },
+  {
     "path": "client-consumes-via-config",
     "kind": "decision",
     "digest": "a1943a649658"

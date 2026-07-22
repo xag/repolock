@@ -5,21 +5,30 @@ other's work.
 
 Git assumes a working tree has one author. Run two agents against the same checkout and that breaks
 quietly: they overwrite each other's edits, or reason about commits a concurrent rebase already
-replaced. `transponder` is an **information layer** that prevents this by visibility rather than
-locking:
+replaced. `transponder` is an **information layer**. Agents agree *before* they work:
 
-- **The map** — an agent declares the files or subtrees it is about to write (`declare_scope`). The
-  map never double-books a region; a conflicting declaration is answered with who holds the overlap
-  and what is free.
-- **The courier** — harness hooks tell an agent what it cannot see from inside its own context: that
-  the checkout is shared, that the file it is about to edit sits in another agent's declared region,
-  or that history moved under it.
-- **The witness** — a fingerprint before and after each shell or MCP call. A write that lands in
-  another agent's region is reported to the agent that made it, with the recovery attached.
+```
+1. channel(repo, session_id, path='what you mean to work on')   what is going on here?
+2. declare_work(repo, session_id, paths, doing, minutes)        -> GREEN LIGHT, or not
+3. not clear? take other work, ask your human, or wait
+4. finish_work(...)                                             the moment you are done
+```
 
-**Nothing is ever refused.** The agents cooperate — they work for one person, and the failure being
-prevented is an agent not knowing another is there, not malice. The design and its rationale are in
-[SPEC.md](SPEC.md). (Through v1 this was `repolock`, a mutex; the git history has that story.)
+- **The map** — `declare_work` never double-books a region. A conflict is an *answer*: who holds the
+  overlap, what they are doing, when they expect to be free, and what is open right now.
+- **The channel** — agents say what they are *doing*, which the map cannot carry. "Replacing the auth
+  middleware return type this hour" is what lets the agent beside you write its caller once.
+- **The courier** — harness hooks hand over what is waiting, when they happen to fire. Best effort,
+  and nothing depends on it.
+
+**Nothing is ever refused, and nothing is watched.** There is no collision detection: a write into
+someone's region is simply lost work, and neither of you will be told. That is deliberate — a
+fingerprint can prove a tree moved but never who moved it, and every version that pretended
+otherwise produced false accusations ([SPEC §4](SPEC.md)). The whole weight is on asking first.
+
+The agents cooperate — they work for one person, and the failure being prevented is an agent not
+knowing another is there, not malice. (Through v1 this was `repolock`, a mutex; the git history has
+that story.)
 
 ## Install (Claude Code)
 
@@ -30,20 +39,26 @@ python -m transponder.toggle on        # wires the hooks at user scope; idempote
 uv run python -m transponder.server    # register this MCP server in your client
 ```
 
-The hooks run on four events — `PreToolUse` and `PostToolUse` (the courier and the witness; matchers
-cover both shells and `mcp__.*`), `Stop`, and `SessionStart` (the drift check). None of them ever
-blocks a tool call.
+The hooks run on four events — `PreToolUse` (hand over anything waiting), `UserPromptSubmit` and
+`SessionStart` (the same, plus the drift check — and the only moment that reaches an agent *before*
+it acts), and `Stop` (release claims against a clean tree). They make no git calls and never block a
+tool call.
 
 ## The channel (MCP tools)
 
 | tool | what it does |
 |---|---|
-| `scopes(repo)` | who is working this checkout and where — call it before you plan |
-| `declare_scope(repo, scope, session_id, intent)` | put your region on the map |
-| `extend_scope(repo, add, session_id)` | widen when you find you need more |
-| `release_scope(repo, session_id, drop?)` | come off the map when a region stops being yours |
+| `channel(repo, session_id, path?)` | **call this first** — who is here, and everything waiting for you |
+| `declare_work(repo, session_id, paths, doing, minutes)` | **returns the green light**, or names who holds the overlap |
+| `extend_work(repo, add, session_id)` | widen when the work turns out bigger than you said |
+| `finish_work(repo, session_id, drop?)` | say you are done — somebody may be waiting |
+| `send_message(repo, session_id, body, to?, everyone?)` | direct is pushed; the room is pulled |
 | `lock_drift(repo, seen_head)` | has history moved under you since you last looked? |
 | `lock_disable` / `lock_enable` / `lock_switch` | the off switch |
+
+Blocked and want to wait? `python -m transponder.wait --repo R --paths p` in the background exits
+when the region frees — and a harness noticing a background task exit is the only thing that can
+wake an agent.
 
 Scopes are filesystem paths — a file, a subtree (`api/**`), or `**` for the whole checkout; spelled
 relative to `repo` and canonicalised, so two spellings of one file cannot be held twice. `.git/index`
@@ -52,35 +67,41 @@ unfinished work into yours.
 
 ## What an agent sees
 
-Walking into a shared checkout:
+Walking onto a machine where somebody else is working:
 
 ```
-THIS CHECKOUT IS SHARED — you are not alone in ~/proj/app:
+YOU ARE NOT THE ONLY AGENT ON THIS MACHINE.
+
   agent 7c1a is working ~/proj/app/api/**  — adding the rate limiter
 
-Nothing is blocked. Stay out of their region, and say where you will write:
-    declare_scope(repo, ['web/**'], intent='what you are doing')
+Nothing here will ever block a tool call. But nothing watches for collisions either: if
+you write where somebody else is working, that work is simply lost, and neither of you
+finds out until it hurts. The agreement happens BEFORE the work, or it does not happen.
 ```
 
-A write that lands in another agent's region is named after the fact, with the fix:
+Asking for a region somebody holds:
 
 ```
-SCOPE VIOLATION — you wrote inside another agent's reserved region.
-  web/page.js  belongs to agent 7c1a (~/proj/app/web/**)
-  ...
-  You committed their work. Recover it:
-      git reset --soft HEAD~1
-      git restore --staged <their paths>   # then stage yours by name, never -A
+NOT CLEAR — you cannot have all of that yet.
+
+  agent 7c1a holds ~/proj/app/api/** — adding the rate limiter
+     you overlap at: ~/proj/app/api/**
+     they expect to finish in ~11 min
+
+FREE RIGHT NOW: web/**, docs/**
+
+Nothing is registered, and nothing is blocked. The holders have been told you asked.
+Choose, and say which you chose: narrower work, your human, or wait.
 ```
 
-Two agents with disjoint scopes work the same checkout at once, in silence.
+Two agents with disjoint regions work the same checkout at once, in silence.
 
 ## Recording
 
-Every declaration, conflict and witnessed write is recorded (flight-recorder, extra `flight`,
-`~/.transponder/flight`) so the design's central bet — that agents contain their work when they can
-see each other — can be checked against real runs rather than asserted. `TRANSPONDER_FLIGHT=0` turns
-it off.
+Every declaration and conflict is recorded (flight-recorder, extra `flight`,
+`~/.transponder/flight`) so the design's central bet — that agents ask before they write — can be
+checked against real runs rather than asserted. It is the *only* instrument left: with detection
+deleted, a collision nobody notices leaves no trace anywhere. `TRANSPONDER_FLIGHT=0` turns it off.
 
 ## The off switch
 
