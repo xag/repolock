@@ -1089,6 +1089,14 @@ DECISIONS = [
                                   "seconds measured here is the mutex's ghost walking back in"}),
          ]),
 
+    # ITS OPENING CLAIM IS FALSE, and the text stands so that stays visible. "The map answers WHERE,
+    # plus one line of why. It cannot carry what an agent is actually doing" — a claim has carried
+    # `intent` since the first version of the map, and carries `doing` now, so the map said what all
+    # along. The decision it argues for is unaffected (a channel, direct pushed, the room pulled) and
+    # the real case for it is better: NOT CLEAR is not a refusal, so agents may knowingly work near
+    # each other, and then being talkative and listening is the whole of what keeps it safe. The
+    # error propagated into four other places before the user caught it, which is the more useful
+    # lesson — a rationale nobody checks gets quoted until it sounds true.
     Node(id="a-channel-they-can-repurpose", kind="decision",
          name="An addressed message substrate — direct pushes, broadcast and channel are pull-only; "
               "a transponder, not a chatter phone",

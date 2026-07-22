@@ -1,10 +1,15 @@
 """The channel the agents can repurpose (ledger: a-channel-they-can-repurpose).
 
-The map answers WHERE, and one line of why. It cannot say what an agent is DOING, and that is the
-thing the agent beside it needs most: two sessions in one checkout are not rivals, they are building
-one app, and knowing that a rewrite of the auth middleware is COMING changes how you write the module
-next to it. Before this, a conflict ended with "file an issue for their part" — which is what you
-write when there is no channel.
+A claim says where an agent is working and what it is doing. This is for everything after that: an
+estimate that slipped, a shape that changed, a question, an answer. Two sessions in one checkout are
+not rivals — they are building one app — and knowing that a rewrite of the auth middleware is COMING
+changes how you write the module next to it.
+
+It earns its keep in the case the protocol does not prevent. NOT CLEAR is not a refusal: an agent
+can weigh it and declare overlapping work anyway, and sometimes that is the right call. Two agents
+who know they are close have every reason to be talkative, and to be listening. Before this, a
+conflict ended with "file an issue for their part" — which is what you write when there is no
+channel.
 
 Three addresses, because the list of addressees has to be unambiguous:
 

@@ -234,12 +234,15 @@ def send_message(repo: str, session_id: str, body: str, to: str = "", everyone: 
     """**Say what you are doing, in one or two lines, so the agent beside you can write code that
     survives it.**
 
-    Send this the moment your work would surprise someone reading the same checkout — you are about
-    to rewrite an interface, move a module, change a schema, or you are partway through something
-    that will look broken if they read it now. The map already says WHERE you are writing; it cannot
-    say what you are DOING, and that is the part that changes what someone else should write. "I am
-    replacing the auth middleware's return type this hour" lets the agent next door write the caller
-    once, for the new shape, instead of twice.
+    `declare_work` already said where you are writing and what you are doing. This is for everything
+    after that, and for the agent who is not going to read your claim in time: an estimate that
+    slipped, a shape that changed, a question, an answer. "I am replacing the auth middleware's
+    return type this hour" lets the agent next door write the caller once, for the new shape,
+    instead of twice.
+
+    It matters most when somebody is working near you on purpose. NOT CLEAR is not a refusal — an
+    agent can weigh it and declare overlapping work anyway, and sometimes that is right. Two agents
+    who know they are close have every reason to be talkative, and to be listening.
 
     You are not rivals. Two agents in one checkout are building one app for one person.
 

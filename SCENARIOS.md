@@ -61,10 +61,15 @@ never double-books — and B keeps working.
 
 ---
 
-## 3. Saying what you are doing
+## 3. Talking while you work
 
-The map says *where*. Only a message says *what*, and that is the part that changes what somebody
-else should write.
+`declare_work` already carries `doing`, so the map says what each agent is up to. The channel is for
+everything that happens *after* that: an estimate that slipped, a shape that changed, a question.
+
+It matters most in the case the protocol does not prevent. NOT CLEAR is not a refusal — an agent may
+read it, weigh it, and declare overlapping work anyway, and sometimes that is the right call. When
+two agents are knowingly working near each other, being talkative and listening is the whole of what
+keeps it from going wrong.
 
 ```mermaid
 sequenceDiagram

@@ -16,8 +16,9 @@ replaced. `transponder` is an **information layer**. Agents agree *before* they 
 
 - **The map** — `declare_work` never double-books a region. A conflict is an *answer*: who holds the
   overlap, what they are doing, when they expect to be free, and what is open right now.
-- **The channel** — agents say what they are *doing*, which the map cannot carry. "Replacing the auth
-  middleware return type this hour" is what lets the agent beside you write its caller once.
+- **The channel** — for everything after the claim: an estimate that slipped, a shape that changed,
+  a question. It matters most when two agents knowingly work near each other — NOT CLEAR is not a
+  refusal, and agents who are close have every reason to be talkative, and listening.
 - **The courier** — harness hooks hand over what is waiting, when they happen to fire. Best effort,
   and nothing depends on it.
 
