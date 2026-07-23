@@ -29,13 +29,33 @@ if env.recording():
     flight.install()
 
 
+def _bad_anchor(repo: str) -> str | None:
+    """Refuse a `repo` that is not a checkout, at the door of every tool that reads or writes the
+    map. One line each, because the alternative is what it replaced: a green light on a directory
+    that does not exist (see scope.why_not_a_checkout).
+
+    `finish_work` is deliberately NOT gated. Releasing must work from any anchor, including the bad
+    one a claim was written under — a map that will not let go of a region is worse than one that
+    should never have granted it.
+    """
+    from transponder import scope
+
+    if bad := scope.why_not_a_checkout(repo):
+        return f"NOT A CHECKOUT — {bad}"
+    return None
+
+
 def _fmt_scopes(repo: str) -> str:
     from transponder import scope
 
     claims = scope.touching(repo)
     dirty = env.git_dirty(repo)
     head = (env.git_head(repo) or "?")[:12]
-    tree = f"tree {'DIRTY, ' + str(len(dirty)) + ' change(s)' if dirty else 'clean'}, head {head}"
+    # An unknown HEAD is reported as what it is. It used to render as `head ?` beside `tree clean`,
+    # which is what a directory that is not a checkout at all looks like — the reassuring half of a
+    # phantom anchor's answer.
+    tree = (f"tree {'DIRTY, ' + str(len(dirty)) + ' change(s)' if dirty else 'clean'}, head {head}"
+            if head != "?" else "NOT A GIT CHECKOUT — nothing here is being watched")
     if not claims:
         return f"{env.canonical(repo)}: nobody has declared anything ({tree})."
     out = [f"{env.canonical(repo)} — {len(claims)} agent(s) at work ({tree}):"]
@@ -55,6 +75,10 @@ def declare_work(repo: str, session_id: str, paths: list[str], doing: str,
     two agents unknowingly rewriting the same file, and it is the only way the agent beside you can
     find out that your change is coming.
 
+      repo     the PATH of that checkout, spelt the way you would spell it to `cd` — absolute, or
+               relative to nothing you can see, so make it absolute. It is not the project's name:
+               a bare name resolves against this server's working directory, and a claim under a
+               directory that does not exist is an agreement with nobody.
       paths    the files and folders you will WRITE TO, in the checkout you will write to — not
                necessarily the one you are sitting in. `src/api/**` a subtree, `src/api/x.py` one
                file, `**` the whole checkout, `.git/index` the staging area (reserve it around a
@@ -80,6 +104,9 @@ def declare_work(repo: str, session_id: str, paths: list[str], doing: str,
     """
     from transponder import scope as sc
 
+    if bad := _bad_anchor(repo):
+        return bad                       # sc.declare refuses this too; here it gets its own label,
+                                         # because "NOT EXPRESSIBLE" reads as a quarrel about globs
     v = sc.declare(repo, session_id, paths, doing, minutes=minutes)
     if v["status"] == "granted":
         held = ", ".join(v["claim"]["scope"])
@@ -149,6 +176,8 @@ def extend_work(repo: str, add: list[str], session_id: str) -> str:
     once: a green light, or who is already there and exactly where you overlap."""
     from transponder import scope as sc
 
+    if bad := _bad_anchor(repo):
+        return bad
     v = sc.extend(repo, session_id, add)
     if v["status"] == "granted":
         return f"GREEN LIGHT — you now hold {', '.join(v['claim']['scope'])}."
@@ -190,6 +219,9 @@ def channel(repo: str, session_id: str, path: str = "") -> str:
     You also get every message waiting for you here: what other agents have said they are doing,
     and anything addressed to you directly. Nothing is pushed reliably; this is how you find out.
 
+    `repo` is the PATH of the checkout (absolute — it is not the project's name), and `path` is
+    relative to it.
+
     Then:
       * nothing in your way  -> declare_work(...) and start
       * somebody is there    -> pick different work, ask your human, or wait (declare_work tells
@@ -198,6 +230,9 @@ def channel(repo: str, session_id: str, path: str = "") -> str:
     from transponder import messages as mail
     from transponder import scope as sc
 
+    if bad := _bad_anchor(repo):
+        return bad                       # the first call of the session is the one that must not
+                                         # answer "nobody is working it" about a phantom folder
     out = []
     got = mail.unread(session_id, repo, kinds=("direct", "channel", mail.BROADCAST))
     if got:
@@ -267,6 +302,9 @@ def send_message(repo: str, session_id: str, body: str, to: str = "", everyone: 
     """
     from transponder import messages
 
+    if bad := _bad_anchor(repo):
+        return bad                       # mail is keyed by checkout: a bad anchor posts to a
+                                         # channel no reader will ever ask for
     kind = "direct" if to else ("broadcast" if everyone else "channel")
     v = messages.send(sender=session_id, body=body, kind=kind, repo=repo, to=to)
     if v["status"] == "empty":

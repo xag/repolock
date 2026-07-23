@@ -65,6 +65,32 @@ def test_overlap_is_decidable_or_it_is_refused(repo):
     assert scope.resolve("**", repo) == scope.canon(repo) + "/**"
 
 
+def test_an_anchor_that_is_not_a_checkout_is_refused(repo):
+    """The anchor was the last unchecked input, and an unchecked anchor does not fail — it succeeds
+    somewhere else. Two agents declared with `repo="myapp"`, a NAME: it was joined to the server's
+    own working directory, and both were granted regions under a folder that has never existed, in
+    a checkout neither was sitting in. Every part of that answer read as reassurance — no conflicts,
+    tree clean, `head ?` — which is what a phantom looks like from the inside.
+    """
+    phantom = os.path.join(repo, "no-such-project")
+    v = declare(phantom, "A", ["api/**"])
+    assert v["status"] == "rejected", "a claim was granted under a directory that does not exist"
+    assert scope.canon(phantom) in v["reason"], (
+        "the refusal must name what the anchor RESOLVED TO — the gap between what the agent typed "
+        "and what the filesystem made of it is the entire bug, and it is invisible from inside")
+    assert not scope.live(), "the refused claim was written anyway"
+
+    plain = os.path.join(repo, "..", "not-a-repo")
+    os.makedirs(plain, exist_ok=True)
+    assert declare(plain, "A", ["**"])["status"] == "rejected", (
+        "a real directory outside any checkout still is not something to agree about")
+
+    dirs(repo, "api")
+    assert scope.why_not_a_checkout(repo) is None, "the real checkout was refused"
+    assert scope.why_not_a_checkout(os.path.join(repo, "api")) is None, (
+        "a subdirectory of a checkout is a legitimate anchor — relative paths still resolve")
+
+
 def test_the_map_never_double_books_and_a_conflict_is_an_answer(repo):
     """A conflicting declare is not registered — and the answer carries who, why, the exact
     intersection to subtract, and what is free right now. Nothing about the agent's WORK is

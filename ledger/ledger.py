@@ -1208,6 +1208,96 @@ DECISIONS = [
                                   "happening by accident. Teaching agents to skim past the courier "
                                   "is the most expensive thing this library can do to itself"}),
          ]),
+
+    Node(id="the-intro-bootstraps-the-map", kind="decision",
+         name="The shared-checkout intro speaks on an EMPTY map — that is the state it exists for",
+         links={"rests_on": ["agree-before-the-work"]},
+         payload={"rationale":
+                  "`shared_note` returned None unless somebody else already held a claim. Read as "
+                  "noise control it is obvious; read as a bootstrap it is a deadlock, and it is the "
+                  "second kind. The map is empty every morning. The first agent of the day was "
+                  "therefore told nothing, so it declared nothing, so the map was STILL empty when "
+                  "a second agent started in the same checkout an hour later — which bought that "
+                  "one silence too. Two sessions, one repo, a full working day, neither ever "
+                  "informed, until a human noticed and typed 'make sure you use transponder'. The "
+                  "hooks ran the whole time and every one recorded no output: not broken, working "
+                  "as written.\n\n"
+                  "agree-before-the-work made the instruction the entire mechanism — 'if agents do "
+                  "not ask, this is decoration'. The intro is the only thing that delivers that "
+                  "instruction (nothing else on the machine mentions this library), so gating it on "
+                  "participation gates the mechanism on its own output.\n\n"
+                  "So it speaks either way and says which way it is, because an empty map is a fact "
+                  "about the machine, not an absence of one. Twice per session at most: once on "
+                  "arrival, and once more if an agent introduced to an empty map is later joined — "
+                  "'you are alone' is the one thing this note can say that stops being true by "
+                  "itself.\n\n"
+                  "The cost is a note to sessions that turn out to be alone all day, and that is "
+                  "the trade: the courier's value is that it speaks rarely and truly, and this "
+                  "spends some of it. Bounded by requiring a checkout under the session's cwd when "
+                  "the map is empty — nobody's claim and no working copy is nothing to collide "
+                  "over. Somebody else's live claim still introduces an agent wherever it sits, "
+                  "since editing across checkouts is ordinary."},
+         children=[
+             Node(id="alt-intro-only-when-somebody-is-there", kind="alternative",
+                  name="Keep the roster-only intro; rely on the second agent being warned",
+                  payload={"why": "what shipped, and it assumes the second agent gets a warning. It "
+                                  "does not: the warning is assembled from claims, and the first "
+                                  "agent — never told — made none. The condition is not rare, it is "
+                                  "the start of every day"}),
+             Node(id="alt-put-it-in-the-project-instructions", kind="alternative",
+                  name="Document the protocol in each repo's CLAUDE.md instead",
+                  payload={"why": "per-repo prose, hand-copied, that goes stale where the library "
+                                  "cannot see it, and reaches only agents in a repo somebody "
+                                  "remembered to edit. The hook already runs on every machine the "
+                                  "library is installed on and knows the live map; the instruction "
+                                  "belongs where the facts are"}),
+         ]),
+
+    Node(id="an-anchor-is-checked-like-a-resource", kind="decision",
+         name="Refuse a `repo` that is not a checkout — an unchecked anchor does not fail, it "
+              "succeeds somewhere else",
+         links={"rests_on": ["agree-before-the-work"]},
+         payload={"rationale":
+                  "Every resource has been validated since day one: a glob has no decidable "
+                  "overlap, so declare refuses it (why_bad). The ANCHOR those resources resolve "
+                  "against was never checked at all — and it is the more dangerous input, because a "
+                  "bad resource is rejected while a bad anchor is GRANTED. Both agents above, once "
+                  "told to use the library, passed the project's name as `repo`; the parameter "
+                  "reads like a name and nothing said otherwise. It was joined to the server "
+                  "process's working directory, and both were handed regions under a directory that "
+                  "has never existed, in a checkout neither was sitting in. The map recorded an "
+                  "agreement about nothing.\n\n"
+                  "Every part of the answer read as reassurance: no conflicts (there is nothing "
+                  "there to conflict with), GREEN LIGHT, `tree clean, head ?`. That is the exact "
+                  "failure this library names elsewhere — a map that reports itself live while "
+                  "nothing feeds it — so it is refused at the boundary rather than described "
+                  "afterwards, and `head ?` now renders as NOT A GIT CHECKOUT instead of dressing "
+                  "as a clean tree.\n\n"
+                  "The refusal names what the anchor RESOLVED TO. The gap between what the agent "
+                  "typed and what the filesystem made of it is the whole bug and is invisible from "
+                  "inside the agent, which cannot see this process's cwd.\n\n"
+                  "In scope.declare, not only at the tool boundary: extend and every other caller "
+                  "inherit it, and a check that lives only in the MCP layer is one wrapper away "
+                  "from being skipped. `finish_work` is deliberately NOT gated — releasing must "
+                  "work from any anchor, including a bad one a claim was written under. A map that "
+                  "will not let go of a region is worse than one that should not have granted it."},
+         children=[
+             Node(id="alt-resolve-the-name-against-a-registry", kind="alternative",
+                  name="Accept a project NAME and look it up (a registry of checkouts, or the "
+                       "session's cwd)",
+                  payload={"why": "makes the ergonomic spelling work — and puts a guess back at the "
+                                  "centre of the protocol, which in_play was written to remove. "
+                                  "cwd is not always the checkout being written to (#8), and a "
+                                  "registry is a second source of truth about where code lives, "
+                                  "wrong the first time somebody moves a directory"}),
+             Node(id="alt-warn-but-grant", kind="alternative",
+                  name="Grant the claim and attach a warning that the anchor looks wrong",
+                  payload={"why": "the informer's reflex, and misapplied here. Nothing is being "
+                                  "refused to the AGENT — its edits proceed untouched, as always. "
+                                  "What is refused is writing a falsehood into the map, which is "
+                                  "the one thing declare has always refused (a conflicting claim is "
+                                  "not registered either)"}),
+         ]),
 ]
 
 HYPOTHESES = [

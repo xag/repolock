@@ -75,6 +75,21 @@
     "digest": "379ae99a2cde"
   },
   {
+    "path": "an-anchor-is-checked-like-a-resource",
+    "kind": "decision",
+    "digest": "178ae352e698"
+  },
+  {
+    "path": "an-anchor-is-checked-like-a-resource/alt-resolve-the-name-against-a-registry",
+    "kind": "alternative",
+    "digest": "e6383d34768a"
+  },
+  {
+    "path": "an-anchor-is-checked-like-a-resource/alt-warn-but-grant",
+    "kind": "alternative",
+    "digest": "813913a5e783"
+  },
+  {
     "path": "client-consumes-via-config",
     "kind": "decision",
     "digest": "a1943a649658"
@@ -473,6 +488,21 @@
     "path": "the-courier-speaks-where-it-can-be-heard/alt-permission-decision-reason",
     "kind": "alternative",
     "digest": "7395b454c2aa"
+  },
+  {
+    "path": "the-intro-bootstraps-the-map",
+    "kind": "decision",
+    "digest": "e51fd8796da4"
+  },
+  {
+    "path": "the-intro-bootstraps-the-map/alt-intro-only-when-somebody-is-there",
+    "kind": "alternative",
+    "digest": "1677352f2c58"
+  },
+  {
+    "path": "the-intro-bootstraps-the-map/alt-put-it-in-the-project-instructions",
+    "kind": "alternative",
+    "digest": "50d2205104e2"
   },
   {
     "path": "the-map-is-the-watch-list",

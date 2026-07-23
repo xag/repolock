@@ -146,7 +146,7 @@ def pre_tool_use(payload: dict) -> None:
         return
     _record()
     session = payload.get("session_id") or "unknown"
-    if note := common.shared_note(session):
+    if note := common.shared_note(session, payload.get("cwd") or ""):
         _say(note)
     for repo in scope.in_play():
         for note in common.collect(session, repo):
@@ -174,7 +174,7 @@ def stop(payload: dict) -> None:
 def session_start(payload: dict) -> None:
     _record()
     session = payload.get("session_id") or "unknown"
-    if note := common.shared_note(session):
+    if note := common.shared_note(session, payload.get("cwd") or ""):
         _say(note)
     # Drained here too, and this is the one moment it beats PreToolUse: output from SessionStart and
     # UserPromptSubmit reaches the model BEFORE it acts. An agent coming back to a region somebody

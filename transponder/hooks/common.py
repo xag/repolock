@@ -155,7 +155,7 @@ def drift_note(session: str, repo: str) -> str | None:
 
 # --- the courier -----------------------------------------------------------------------------------
 
-def shared_note(session: str) -> str | None:
+def shared_note(session: str, cwd: str = "") -> str | None:
     """Introduce the machine, once per session. An agent cannot see the other agents from inside its
     own context — this is the fact it is missing, and it is delivered without anyone having to work
     out where the agent "is".
@@ -165,19 +165,52 @@ def shared_note(session: str) -> str | None:
     editing across checkouts (the ordinary case for anyone with a lib and its client open) was told
     nothing at all. Guessing where an agent is was never necessary here: the thing it needs to know
     is that the machine is shared and that it should say what it will edit.
+
+    IT ALSO USED TO REQUIRE SOMEBODY ELSE TO BE ON THE MAP ALREADY — `if not claims: return None` —
+    and that is the one condition under which it cannot do its job. The map starts empty. The first
+    agent of the day was therefore told nothing, so it declared nothing, so the map was STILL empty
+    when the second agent arrived an hour later, so that one was told nothing either: two agents in
+    one checkout, each invisible to the other, for a whole working day, until a human noticed and
+    said use the transponder. The intro is what bootstraps the map, so it cannot be gated on the map
+    being non-empty; the empty map is precisely when nobody has been told yet.
+
+    So it speaks either way, and it says which way it is — an empty map is a real fact about the
+    machine, not a reason for silence. At most twice per session: once on arrival, and once more if
+    an agent that was introduced to an empty map is later joined by someone, because "you are alone"
+    is the one thing this note can say that stops being true on its own.
+
+    On an empty map it needs one thing back: `cwd`, and a checkout there. Somebody else's live claim
+    is reason enough to introduce an agent wherever it is sitting (it may be editing across
+    checkouts — that is the ordinary case). Nobody's claim and no checkout under it is a session
+    with nothing to collide over, and telling it how to declare is spam.
     """
     if scope.declared(session):
         return None                  # a participant got the map back with its grant; the intro is
                                      # for the agent that has not spoken yet
     claims = [c for c in scope.live() if c["session"] != session]
-    if not claims or _recall(NOTED_DIR, session, "machine"):
-        return None
-    _remember(NOTED_DIR, session, "machine", "1")
+    said = _recall(NOTED_DIR, session, "machine")
+    if said and (said != "alone" or not claims):
+        return None                  # already introduced — and if that intro was the empty-map one,
+                                     # arrivals since then are news (a legacy "1" counts as done)
+    if not claims and scope.why_not_a_checkout(cwd or os.getcwd()):
+        return None                  # a filesystem walk, not a `git` call: this runs on every tool
+                                     # call of a session that is never going to be introduced
+    _remember(NOTED_DIR, session, "machine", "roster" if claims else "alone")
 
-    out = ["YOU ARE NOT THE ONLY AGENT ON THIS MACHINE.", ""]
-    for c in claims:
-        out.append(f"  agent {c['session']} holds {', '.join(c['scope'])}"
-                   + (f" — {c.get('intent')}" if c.get("intent") else ""))
+    if claims:
+        out = ["YOU ARE NOT THE ONLY AGENT ON THIS MACHINE.", ""]
+        for c in claims:
+            out.append(f"  agent {c['session']} holds {', '.join(c['scope'])}"
+                       + (f" — {c.get('intent')}" if c.get("intent") else ""))
+    else:
+        out = [
+            "NOBODY HAS DECLARED ANYTHING ON THIS MACHINE — which is not the same as being alone.",
+            "",
+            "An empty map means only that nobody has spoken yet, and you cannot see the other",
+            "agents from inside your own context. You are reading this because being first is",
+            "exactly when declaring matters: the next agent to arrive is told about you if you",
+            "declared, and told nothing if you did not.",
+        ]
     out += [
         "",
         "Nothing here will ever block a tool call. But nothing watches for collisions either: if",

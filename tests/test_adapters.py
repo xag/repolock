@@ -115,6 +115,44 @@ def test_a_clean_stop_takes_the_session_off_the_map(repo):
     assert not scope.declared("A"), "a departed session left stale information on the map"
 
 
+# --- the courier, and the day it said nothing --------------------------------------------------
+
+def test_the_intro_speaks_to_the_first_agent_of_the_day(repo):
+    """The regression that cost a working day, and the reason it could never show up in a test that
+    had two agents in it: the intro used to require somebody ELSE on the map, so it was silent in
+    the only state the map is ever in at the start — empty. First agent told nothing, therefore
+    declaring nothing, therefore the second agent an hour later also told nothing.
+
+    The bootstrap has to run on an empty map or it never runs at all."""
+    assert not scope.live(), "the fixture handed us a map that was already primed"
+    res = run_hook(CLAUDE, {"hook_event_name": "SessionStart", "cwd": repo, "session_id": "FIRST"})
+    assert res.returncode == 0
+    assert "declare_work" in res.stdout, (
+        "the first agent of the day was told nothing — so the map stays empty, and everyone who "
+        "arrives after it is told nothing either")
+
+    again = run_hook(CLAUDE, {"hook_event_name": "SessionStart", "cwd": repo,
+                              "session_id": "FIRST"})
+    assert not again.stdout.strip(), "introduced twice — an informer that repeats itself is skimmed"
+
+
+def test_an_agent_introduced_alone_is_told_when_somebody_arrives(repo):
+    """"You are alone" is the one thing the intro can say that stops being true by itself. Said
+    once on arrival, it would otherwise be the last word a session ever hears about the map."""
+    run_hook(CLAUDE, {"hook_event_name": "SessionStart", "cwd": repo, "session_id": "FIRST"})
+    scope.declare(repo, "SECOND", ["api/**"], "the rate limiter")
+
+    res = run_hook(CLAUDE, {"hook_event_name": "UserPromptSubmit", "cwd": repo,
+                            "session_id": "FIRST"})
+    assert "NOT THE ONLY AGENT" in res.stdout and "SECOND" in res.stdout, (
+        "an agent introduced to an empty map never heard that the map filled up")
+    assert "the rate limiter" in res.stdout, "told who, not told what they are doing"
+
+    third = run_hook(CLAUDE, {"hook_event_name": "UserPromptSubmit", "cwd": repo,
+                              "session_id": "FIRST"})
+    assert "NOT THE ONLY AGENT" not in third.stdout, "the roster intro repeated"
+
+
 # --- the plumbing the contract stands on -----------------------------------------------------------
 
 def test_fails_open_on_garbage_input(repo):

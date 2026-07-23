@@ -79,6 +79,39 @@ def why_bad(resource: str) -> str:
             f"reserve that) or a contract no witness can check.")
 
 
+def why_not_a_checkout(anchor: str) -> str | None:
+    """None if `anchor` names a real checkout on this machine; otherwise why it does not.
+
+    The anchor was the last unchecked input in the protocol, and it is the one every relative
+    spelling is resolved against — so an anchor that is not a checkout does not fail, it SUCCEEDS
+    at a fiction. Two agents passed their project's NAME as `repo` an hour apart (it reads like a
+    name, and nothing said otherwise); `resolve`
+    joined it to this process's working directory, and both were granted regions under a directory
+    that has never existed, in a checkout neither of them was sitting in. The map said they had
+    agreed. They had agreed about nothing, and every part of the answer read as reassurance: no
+    conflicts (there is nothing there to conflict with), tree clean, `head ?`.
+
+    That is the shape this library exists to object to — a map that reports itself live while
+    nothing feeds it — so it is refused at the boundary rather than described afterwards. The
+    message names what the anchor RESOLVED TO, because the gap between what an agent typed and what
+    the filesystem made of it is the whole bug, and it is invisible from inside the agent.
+    """
+    if not (anchor or "").strip():
+        return ("`repo` is empty. It is the PATH of the checkout you are writing to — pass it "
+                "absolute (e.g. C:/Users/you/Projects/app), the way you would spell it to `cd`.")
+    path = canon(anchor)
+    if not os.path.isdir(path):
+        return (f"{anchor!r} resolves to {path}, which does not exist. `repo` is a PATH, not a "
+                f"project's name: a bare name is joined to this server's working directory, which "
+                f"is nobody's checkout. Pass the absolute path of the checkout you will write to — "
+                f"if you are sitting in it, that is your cwd.")
+    if not _checkout_of(path + "/**"):
+        return (f"{anchor!r} resolves to {path}, which is not in a git checkout (no .git at or "
+                f"above it). Claims are agreements about a working copy; declare against the "
+                f"checkout you will actually write to.")
+    return None
+
+
 def _prefix(resource: str) -> str | None:
     """The directory a subtree covers, or None for a single file."""
     return resource[:-2] if resource.endswith("/**") else None
@@ -252,6 +285,11 @@ def declare(anchor: str, session: str, resources: list[str], intent: str = "",
     refused agent takes something narrower and works NOW, instead of waiting or guessing.
     """
     now = env.now()
+
+    # The anchor first: every resource below is resolved against it, so a bad anchor does not
+    # produce a bad claim — it produces a plausible one, somewhere nobody is working.
+    if bad := why_not_a_checkout(anchor):
+        return {"status": "rejected", "reason": bad}
 
     scope = []
     for r in resources:
