@@ -210,6 +210,16 @@
     "digest": "9efd89c78242"
   },
   {
+    "path": "hyp-the-ask-lands-when-it-is-answerable",
+    "kind": "hypothesis",
+    "digest": "d3156f9264fc"
+  },
+  {
+    "path": "hyp-the-ask-lands-when-it-is-answerable/kill-the-ask-is-ignored",
+    "kind": "falsification",
+    "digest": "c940d2009896"
+  },
+  {
     "path": "hyp-the-dirty-handback-can-be-refused",
     "kind": "hypothesis",
     "digest": "2f3e2a968660"
@@ -453,6 +463,36 @@
     "path": "tell-both-parties/alt-wake-the-victim",
     "kind": "alternative",
     "digest": "a5aa0c285c54"
+  },
+  {
+    "path": "the-ask-goes-where-it-can-be-answered",
+    "kind": "decision",
+    "digest": "66ecf00aa82b"
+  },
+  {
+    "path": "the-ask-goes-where-it-can-be-answered/alt-a-louder-intro-at-session-start",
+    "kind": "alternative",
+    "digest": "20a3f5fb3a4d"
+  },
+  {
+    "path": "the-ask-goes-where-it-can-be-answered/alt-block-the-first-undeclared-write",
+    "kind": "alternative",
+    "digest": "760a0e872c7b"
+  },
+  {
+    "path": "the-ask-goes-where-it-can-be-answered/alt-cap-the-notes",
+    "kind": "alternative",
+    "digest": "02b8198c132b"
+  },
+  {
+    "path": "the-ask-goes-where-it-can-be-answered/alt-read-shells-to-find-writes",
+    "kind": "alternative",
+    "digest": "e9bd179ff7b1"
+  },
+  {
+    "path": "the-ask-goes-where-it-can-be-answered/alt-repeat-the-ask-every-prompt",
+    "kind": "alternative",
+    "digest": "dcf8252a3318"
   },
   {
     "path": "the-background-task-cannot-be-observed",

@@ -11,17 +11,18 @@ that replaced all of that fits in one line:
 
 Four events, two jobs:
 
-  PreToolUse   the courier: introduce a shared checkout (once), warn when a declared write is about
-               to land in another agent's region — information at its most valuable moment, and
-               still not a gate. For shells and MCP calls, take the witness's before-picture.
-
-  PostToolUse  the witness: diff the picture. Unmoved => it read, nothing is said. Moved into
-               another agent's declared region => the loudest thing this library says, with the
-               remedy attached — a violation is a fact, not a guess, and it must not be silent.
+  PreToolUse   the courier: hand over whatever is waiting for this agent, and remember any write it
+               makes that no claim of its own covers. Cheap on purpose — no git, no snapshots — so
+               it can run on every call.
 
   Stop         release this session's claims here against a clean tree; ask ONCE about a dirty one.
 
   SessionStart the drift check: has history moved under what this session remembers?
+
+  UserPromptSubmit
+               THE ASK. The one event that is both before the model acts and AFTER the human has
+               said what the work is — so it carries the shared-checkout intro (once) and, for a
+               session that keeps writing without a claim, the list of what it has written.
 
 Install: a `hooks` block in ~/.claude/settings.json (user scope, so every repo on the machine is
 covered) wiring all four events — `python -m transponder.toggle on` writes it. The matchers include
@@ -146,6 +147,11 @@ def pre_tool_use(payload: dict) -> None:
         return
     _record()
     session = payload.get("session_id") or "unknown"
+    # Remembered here, reported at the next prompt. It has to be RECORDED at the only event that
+    # sees the write and REPORTED at the only event the model reads before acting; those are not
+    # the same event, and trying to make them one is what produced a warning delivered after the
+    # thing it warned about (see common.py, where heads_up stood).
+    common.note_write(session, payload.get("tool_name") or "", payload.get("tool_input") or {})
     if note := common.shared_note(session, payload.get("cwd") or ""):
         _say(note)
     for repo in scope.in_play():
@@ -171,14 +177,11 @@ def stop(payload: dict) -> None:
             _deny(block)                 # exit 2 — so this asks about one checkout per stop
 
 
-def session_start(payload: dict) -> None:
-    _record()
-    session = payload.get("session_id") or "unknown"
-    if note := common.shared_note(session, payload.get("cwd") or ""):
-        _say(note)
-    # Drained here too, and this is the one moment it beats PreToolUse: output from SessionStart and
-    # UserPromptSubmit reaches the model BEFORE it acts. An agent coming back to a region somebody
-    # wrote in should learn it before its first tool call, not beside the result of one.
+def _read_side(session: str) -> None:
+    """Mail addressed to this agent, and history that moved under it. Drained at both read-side
+    events, and this is the moment it beats PreToolUse: output from SessionStart and
+    UserPromptSubmit reaches the model BEFORE it acts. An agent coming back to a region somebody
+    wrote in should learn it before its first tool call, not beside the result of one."""
     for repo in scope.in_play():
         for note in common.collect(session, repo):
             _say(note)
@@ -186,11 +189,47 @@ def session_start(payload: dict) -> None:
             _say(note)
 
 
+def session_start(payload: dict) -> None:
+    """Arrival, and NOT the ask.
+
+    The intro used to be spent here, and being spent here is what made it useless. SessionStart
+    fires before the human has typed anything, so it asked an agent to declare what it would write
+    to at the one moment in the session when that question has no answer — and, being once-only,
+    never asked again. A nine-hour session got a wall of text before it knew what it was for.
+
+    What is left is the part that IS answerable on arrival: what moved while this session was away.
+    """
+    _record()
+    _read_side(payload.get("session_id") or "unknown")
+
+
+def user_prompt_submit(payload: dict) -> None:
+    """The ask, at the only moment this harness offers where it can be answered.
+
+    Both properties are needed and no other event has both: it is BEFORE the model acts (so the
+    remedy can be run instead of regretted — PreToolUse context lands beside the tool result, after
+    the write) and it is AFTER the human has said what the work is (so "what will you write to?"
+    has an answer).
+
+    It also reaches an agent that SessionStart and PreToolUse cannot: a session parked on a
+    question makes no tool calls, so anything addressed to it waits until it writes again, which is
+    one call too late.
+    """
+    _record()
+    session = payload.get("session_id") or "unknown"
+    if note := common.shared_note(session, payload.get("cwd") or ""):
+        _say(note)
+    _read_side(session)
+    for repo in common.wrote_in(session):
+        if note := common.undeclared_note(session, repo):
+            _say(note)
+
+
 HANDLERS = {
     "PreToolUse": pre_tool_use,
     "Stop": stop,
     "SessionStart": session_start,
-    "UserPromptSubmit": session_start,   # same read-side check, on the way back in
+    "UserPromptSubmit": user_prompt_submit,
 }
 
 
@@ -207,12 +246,11 @@ EVENTS = {
     "PreToolUse": None,
     "Stop": None,
     "SessionStart": None,
-    # HANDLERS has routed this to session_start since v2 — "the same read-side check, on the way
-    # back in" — and it was never wired here, so it never ran. Not once. It is the most valuable
-    # event of the four and the only one that reaches the model BEFORE it acts (stdout on
-    # UserPromptSubmit is added as context; on PreToolUse it lands beside the tool result). It is
-    # also exactly where a victim is reached: a session parked on a question makes no tool calls,
-    # so mail addressed to it waits until it writes again — which is one call too late.
+    # The most valuable event of the four, and it spent v2 unwired: HANDLERS routed it to
+    # session_start — "the same read-side check, on the way back in" — but it was absent here, so
+    # it never ran. Not once. It is now wired AND has a handler of its own, because routing it to
+    # session_start left the ask where it could not be answered: whichever of the two fired first
+    # spent the once-only intro, and SessionStart always fires first.
     "UserPromptSubmit": None,
 }
 

@@ -1253,6 +1253,69 @@ DECISIONS = [
                                   "belongs where the facts are"}),
          ]),
 
+    Node(id="the-ask-goes-where-it-can-be-answered", kind="decision",
+         links={"rests_on": ["the-intro-bootstraps-the-map", "there-is-no-warning-before-a-write"]},
+         name="The intro moves off SessionStart to the first prompt, and a recurring note reports "
+              "the session's OWN undeclared writes",
+         payload={"rationale":
+                  "the-intro-bootstraps-the-map fixed WHETHER the intro speaks. It did not fix "
+                  "WHEN, and the moment was wrong in a way that undid most of the win. SessionStart "
+                  "fires before the human has typed anything, so the intro asked 'what will you "
+                  "write to?' at the one instant in a session when that question has no answer — "
+                  "and, being once-only, never asked again. Observed on this machine: a session ran "
+                  "for hours across this checkout and called nothing. The hook fired. The note was "
+                  "delivered. Both halves worked and the outcome was the same as the day the "
+                  "courier was mute.\n\n"
+                  "UserPromptSubmit is the only event with both properties needed: BEFORE the model "
+                  "acts (so a remedy can be run rather than regretted) and AFTER the human has "
+                  "stated the work (so the ask has an answer). It was wired by "
+                  "there-is-no-warning-before-a-write but routed to session_start, so whichever of "
+                  "the two fired first spent the once-only flag — and SessionStart always fires "
+                  "first. Splitting the handler is most of the fix.\n\n"
+                  "The rest is a recurring note, because once is what produced the nine-hour "
+                  "silence. PreToolUse remembers writes no claim of the session's own covers; the "
+                  "next prompt reports them BY NAME, with declare_work/extend_work filled in — "
+                  "session_id included, since that is the one argument an agent cannot look up "
+                  "about itself, and a remedy beginning 'work out who you are' does not get run.\n\n"
+                  "THIS IS NOT THE WITNESS RETURNING. a-fingerprint-cannot-name-an-author killed "
+                  "detection because a tree fingerprint proves movement and never authorship. "
+                  "Nothing here observes a tree, another agent, or anything outside this session's "
+                  "own tool-call payloads: it reports what THIS agent did from the record of it "
+                  "doing it, so there is no attribution to get wrong. Where its writes fall inside "
+                  "somebody else's declared region it says so — an intersection of two facts it "
+                  "already holds — and says plainly that whose bytes are in the file now is exactly "
+                  "what it cannot know."},
+         children=[
+             Node(id="alt-a-louder-intro-at-session-start", kind="alternative",
+                  name="Keep the intro at arrival and make it louder",
+                  payload={"why": "volume is not the defect, placement is. At SessionStart there is "
+                                  "no task yet, so no wording makes the ask answerable; and by the "
+                                  "time it is, the note is far back in the context or gone through "
+                                  "compaction"}),
+             Node(id="alt-repeat-the-ask-every-prompt", kind="alternative",
+                  name="Deliver the ask on every UserPromptSubmit",
+                  payload={"why": "wallpaper, and `_emit` already states the rule it breaks — an "
+                                  "information layer that speaks on every call teaches its reader "
+                                  "to skim, and this shares a delivery path with the things that "
+                                  "must not be skimmed. Hence 1, 2, 4, 8...: a hundred-edit session "
+                                  "gets about seven notes, each naming files the last could not"}),
+             Node(id="alt-cap-the-notes", kind="alternative",
+                  name="Report the first N undeclared writes and then stop",
+                  payload={"why": "goes quiet exactly when a session has run longest, which is when "
+                                  "its undeclared surface is largest — the failure being fixed, "
+                                  "with a larger constant"}),
+             Node(id="alt-block-the-first-undeclared-write", kind="alternative",
+                  name="exit 2 on a write with no claim covering it",
+                  payload={"why": "the mutex returning through the informer's door, on the path "
+                                  "where prevention looks cheapest. information-not-exclusion gave "
+                                  "up exclusion knowingly"}),
+             Node(id="alt-read-shells-to-find-writes", kind="alternative",
+                  name="Infer writes from Bash commands too, so the note sees everything",
+                  payload={"why": "#4 and #7. Deciding anything by reading a command is what the "
+                                  "lock died of; the note records only tools that NAME their "
+                                  "target, and undercounts on purpose"}),
+         ]),
+
     Node(id="an-anchor-is-checked-like-a-resource", kind="decision",
          name="Refuse a `repo` that is not a checkout — an unchecked anchor does not fail, it "
               "succeeds somewhere else",
@@ -1514,6 +1577,32 @@ HYPOTHESES = [
                   payload={"claim": "A flight recording shows a lease lapsing between two tool "
                                     "calls of one still-active session (a single call longer than "
                                     "the lease)."}),
+         ]),
+
+    Node(id="hyp-the-ask-lands-when-it-is-answerable", kind="hypothesis",
+         links={"tests": ["the-ask-goes-where-it-can-be-answered"]},
+         name="An agent asked at prompt time, and told what it has actually written, declares",
+         payload={"claim": "The undeclared long session was a placement failure, not a refusal: "
+                           "moved to UserPromptSubmit and repeated against named files, the ask "
+                           "gets acted on. This is the behavioural half of the change and it is "
+                           "genuinely open — the alternative is that agents do not decline to "
+                           "declare because they were asked at a useless moment, but because "
+                           "declaring competes with the task in front of them, in which case "
+                           "better placement moves nothing and the notes are pure cost.",
+                  "cadence": "per session that writes without a claim"},
+         children=[
+             Node(id="kill-the-ask-is-ignored", kind="falsification",
+                  payload={"claim": "A session takes THREE undeclared-write notes in one checkout "
+                                    "— so it has been told at 1, 2 and 4 files, by name, with the "
+                                    "call filled in — and still calls neither declare_work nor "
+                                    "extend_work before it stops.",
+                           "note": "Mechanical and retrospective: the note's own memo records how "
+                                   "many times it spoke (`wrote/<session>.txt`, the `said` count) "
+                                   "and the claims store records whether that session ever "
+                                   "declared. Needs nobody to lose work first. Written down "
+                                   "because the honest failure mode of this change is that it "
+                                   "adds noise and buys nothing, and that must be findable "
+                                   "without anyone remembering to look."}),
          ]),
 ]
 

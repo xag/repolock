@@ -123,23 +123,32 @@ def test_the_intro_speaks_to_the_first_agent_of_the_day(repo):
     the only state the map is ever in at the start — empty. First agent told nothing, therefore
     declaring nothing, therefore the second agent an hour later also told nothing.
 
-    The bootstrap has to run on an empty map or it never runs at all."""
+    The bootstrap has to run on an empty map or it never runs at all.
+
+    It is driven from UserPromptSubmit rather than SessionStart because that is where the intro now
+    lives: at arrival the human has not spoken yet, so "what will you write to?" is unanswerable,
+    and spending the once-only note there is what left long sessions never declaring anything."""
     assert not scope.live(), "the fixture handed us a map that was already primed"
-    res = run_hook(CLAUDE, {"hook_event_name": "SessionStart", "cwd": repo, "session_id": "FIRST"})
+    res = claude_prompt(repo, "FIRST")
     assert res.returncode == 0
     assert "declare_work" in res.stdout, (
         "the first agent of the day was told nothing — so the map stays empty, and everyone who "
         "arrives after it is told nothing either")
 
-    again = run_hook(CLAUDE, {"hook_event_name": "SessionStart", "cwd": repo,
-                              "session_id": "FIRST"})
+    again = claude_prompt(repo, "FIRST")
     assert not again.stdout.strip(), "introduced twice — an informer that repeats itself is skimmed"
 
 
 def test_an_agent_introduced_alone_is_told_when_somebody_arrives(repo):
     """"You are alone" is the one thing the intro can say that stops being true by itself. Said
-    once on arrival, it would otherwise be the last word a session ever hears about the map."""
-    run_hook(CLAUDE, {"hook_event_name": "SessionStart", "cwd": repo, "session_id": "FIRST"})
+    once on arrival, it would otherwise be the last word a session ever hears about the map.
+
+    The priming call has to be the one that actually introduces, or this test passes while covering
+    nothing: with the intro moved off SessionStart, priming there left FIRST un-introduced, so the
+    prompt below delivered its FIRST intro (the roster one) and the alone -> joined transition this
+    test is named for went unexercised."""
+    assert claude_prompt(repo, "FIRST").stdout.count("NOBODY HAS DECLARED") == 1, (
+        "FIRST was not introduced to an empty map, so there is no transition to observe")
     scope.declare(repo, "SECOND", ["api/**"], "the rate limiter")
 
     res = run_hook(CLAUDE, {"hook_event_name": "UserPromptSubmit", "cwd": repo,
@@ -223,3 +232,165 @@ def test_a_write_outside_every_repo_is_nobodys_business(repo, tmp_path):
                             "tool_input": {"file_path": str(tmp_path / "scratch" / "notes.md")},
                             "cwd": str(tmp_path), "session_id": "B"})
     assert res.returncode == 0 and not res.stdout.strip()
+
+
+# --- the ask, where it can be answered -------------------------------------------------------------
+#
+# The intro was delivered once, at SessionStart, which is before the human has said what the work
+# is. So it asked "what will you write to?" at the one moment that question has no answer, and being
+# once-only it never asked again: a session ran for hours, edited freely, and called nothing. These
+# tests hold the two halves of the fix — the ask moved to where it is answerable, and a recurring
+# note that reports what the agent has actually written.
+
+
+def claude_prompt(repo, session, prompt="do the thing"):
+    return run_hook(CLAUDE, {"hook_event_name": "UserPromptSubmit", "cwd": repo,
+                             "session_id": session, "prompt": prompt})
+
+
+def test_the_intro_waits_for_a_prompt_it_can_be_answered_from(repo):
+    """SessionStart must NOT spend the once-only intro. It fires before the first human word."""
+    start = run_hook(CLAUDE, {"hook_event_name": "SessionStart", "cwd": repo, "session_id": "A"})
+    assert start.returncode == 0
+    assert "NOBODY HAS DECLARED" not in start.stdout, (
+        "the intro was spent at arrival again — asked before the work was known, never asked after")
+    assert "NOBODY HAS DECLARED" in claude_prompt(repo, "A").stdout
+
+
+def test_undeclared_writes_are_named_back_at_the_next_prompt(repo):
+    claude_prompt(repo, "A")                                  # spend the intro
+    claude_edit(repo, "A", "a.txt")
+    res = claude_prompt(repo, "A")
+    assert "DECLARED NOTHING" in res.stdout
+    assert "a.txt" in res.stdout, "it said something was written but not what"
+    assert "declare_work" in res.stdout
+
+
+def test_the_remedy_carries_the_one_argument_an_agent_cannot_look_up(repo):
+    """`session_id` is not visible from inside an agent's own context; it has to be told. A remedy
+    whose first step is 'work out who you are' is a remedy that does not get run."""
+    claude_prompt(repo, "A")
+    claude_edit(repo, "A", "a.txt")
+    out = claude_prompt(repo, "A").stdout
+    assert "'A'" in out and "session_id" in out
+
+
+def test_the_remedy_is_copy_pasteable(repo):
+    """It carried `minutes=<how long>`, which is a syntax error. A remedy an agent has to repair
+    before running is a remedy that mostly does not get run."""
+    import ast
+
+    claude_prompt(repo, "A")
+    claude_edit(repo, "A", "a.txt")
+    out = json.loads(claude_prompt(repo, "A").stdout)["hookSpecificOutput"]["additionalContext"]
+    call = out[out.index("declare_work("):].strip()
+    ast.parse(call)                                   # raises if the snippet does not parse
+
+    assert "\\\\" not in call, (
+        "the path came out backslash-escaped and lowercased; a remedy that looks mangled reads as "
+        "a broken tool")
+
+
+def test_the_note_speaks_on_a_doubling_schedule(repo):
+    """Every prompt is wallpaper; once is the bug being fixed. 1, 2, 4, ... is neither."""
+    claude_prompt(repo, "A")
+    claude_edit(repo, "A", "a.txt")
+    assert "DECLARED NOTHING" in claude_prompt(repo, "A").stdout          # 1st
+    assert "DECLARED NOTHING" not in claude_prompt(repo, "A").stdout, (
+        "it spoke with nothing new to say — this is how a reader is taught to skim")
+    claude_edit(repo, "A", "b.txt")
+    assert "DECLARED NOTHING" in claude_prompt(repo, "A").stdout          # 2
+    claude_edit(repo, "A", "c.txt")
+    assert "DECLARED NOTHING" not in claude_prompt(repo, "A").stdout      # 3 < 4
+    claude_edit(repo, "A", "d.txt")
+    assert "DECLARED NOTHING" in claude_prompt(repo, "A").stdout          # 4
+
+
+def test_declaring_silences_it(repo):
+    claude_prompt(repo, "A")
+    claude_edit(repo, "A", "a.txt")
+    assert "DECLARED NOTHING" in claude_prompt(repo, "A").stdout
+    scope.declare(repo, "A", ["**"], "the whole checkout")
+    claude_edit(repo, "A", "b.txt")
+    out = claude_prompt(repo, "A").stdout
+    assert "DECLARED NOTHING" not in out and "OUTSIDE WHAT YOU DECLARED" not in out, (
+        "an agent doing exactly what it said it would was told off for it")
+
+
+def test_a_write_outside_a_held_scope_asks_for_extend_not_declare(repo):
+    os.makedirs(os.path.join(repo, "api"), exist_ok=True)
+    scope.declare(repo, "A", ["api/**"], "the rate limiter")
+    claude_prompt(repo, "A")
+    claude_edit(repo, "A", os.path.join("api", "x.py"))
+    assert "OUTSIDE WHAT YOU DECLARED" not in claude_prompt(repo, "A").stdout
+
+    claude_edit(repo, "A", "a.txt")
+    res = claude_prompt(repo, "A")
+    assert "OUTSIDE WHAT YOU DECLARED" in res.stdout
+    assert "extend_work" in res.stdout, "told to declare again while already holding a region"
+
+
+def test_a_neighbour_on_the_map_does_not_change_which_remedy_is_offered(repo):
+    """The two halves of the note are independent and were briefly not: rendering the roster bound
+    the same name the remedy branch tests. Every other test here has an empty map, so the roster
+    loop never ran and the shadow never showed.
+
+    The failure needs BOTH: a session holding nothing (so the remedy should be declare_work) and a
+    neighbour to render (so the name gets rebound to a non-empty scope, and the branch flips)."""
+    os.makedirs(os.path.join(repo, "docs"), exist_ok=True)
+    scope.declare(repo, "NEIGHBOUR", ["docs/**"], "the changelog")
+    claude_prompt(repo, "A")
+    claude_edit(repo, "A", "a.txt")
+
+    out = claude_prompt(repo, "A").stdout
+    assert "NEIGHBOUR" in out and "the changelog" in out
+    assert "declare_work" in out and "extend_work" not in out, (
+        "a session holding nothing was told to widen a region it does not have")
+
+
+def test_it_names_the_overlap_between_what_you_wrote_and_what_they_declared(repo):
+    """The one thing here worth interrupting for, and it invents nothing: the writes come from this
+    session's own tool-call payloads, the region from a claim made before them. It is not the
+    witness — it does not say the other agent's work was damaged, only where two intentions met."""
+    os.makedirs(os.path.join(repo, "api"), exist_ok=True)
+    scope.declare(repo, "SECOND", ["api/**"], "the rate limiter")
+    claude_prompt(repo, "A")
+    claude_edit(repo, "A", os.path.join("api", "x.py"))
+
+    out = claude_prompt(repo, "A").stdout
+    assert "INSIDE THAT REGION" in out
+    assert "api/x.py" in out
+    assert "send_message" in out and "'SECOND'" in out, "named the collision, offered no way to ask"
+    assert "whose bytes are in the file now" in out, (
+        "it must not imply it knows what happened to the other agent's work — it does not")
+
+
+def test_a_write_that_misses_every_declared_region_says_so(repo):
+    """The other half: a neighbour on the map is not by itself a collision, and saying so keeps the
+    loud case loud."""
+    os.makedirs(os.path.join(repo, "api"), exist_ok=True)
+    scope.declare(repo, "SECOND", ["api/**"], "the rate limiter")
+    claude_prompt(repo, "A")
+    claude_edit(repo, "A", "a.txt")
+
+    out = claude_prompt(repo, "A").stdout
+    assert "INSIDE THAT REGION" not in out
+    assert "Nothing you have written falls inside what they declared" in out
+
+
+def test_a_shell_is_still_never_read_to_guess_what_it_wrote(repo):
+    """#4 and #7 in one line. The note records tools that NAME their target; a command is text, and
+    the moment anything decides by reading it we are back where the lock died."""
+    claude_prompt(repo, "A")
+    run_hook(CLAUDE, {"hook_event_name": "PreToolUse", "tool_name": "Bash",
+                      "tool_input": {"command": f"echo x > {os.path.join(repo, 'a.txt')}"},
+                      "cwd": repo, "session_id": "A"})
+    assert "DECLARED NOTHING" not in claude_prompt(repo, "A").stdout
+
+
+def test_the_note_never_refuses_anything(repo):
+    """The contract, restated over the new path: an agent that ignores every note keeps working."""
+    claude_prompt(repo, "A")
+    for name in ("a.txt", "b.txt", "c.txt", "d.txt", "e.txt"):
+        assert claude_edit(repo, "A", name).returncode == 0
+        assert claude_prompt(repo, "A").returncode == 0

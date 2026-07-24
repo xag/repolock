@@ -6,8 +6,11 @@ the gate hurt someone (#4, #7, #10, #11). All of that is gone, and it is gone on
 project stopped blocking agents and started informing them. What remains is exactly two jobs:
 
   THE COURIER   tell an agent what it cannot see from inside its own context: who else is working
-                this checkout and where (shared_note, once); that history moved under it
-                (drift_note). Notes reach the model as `hookSpecificOutput.additionalContext` —
+                this checkout and where (shared_note, once, at the first prompt rather than at
+                arrival); that history moved under it (drift_note); and what it has itself written
+                without a claim covering it (undeclared_note, on a doubling schedule, because once
+                is how a nine-hour session ends up never having declared anything at all). Notes
+                reach the model as `hookSpecificOutput.additionalContext` —
                 NOT as stdout, which goes to a debug log and reached nobody for the whole life of
                 v2. It is the one channel that informs a running agent without refusing its call,
                 and it lands beside the tool result: the courier speaks between calls, never before
@@ -37,6 +40,7 @@ from transponder import env, messages, scope, witness
 
 SEEN_DIR = "seen"            # per-(session, repo): the last HEAD this session saw — the drift check
 NOTED_DIR = "noted"          # ...and whether the courier already introduced this shared checkout
+WROTE_DIR = "wrote"          # per-session: what it has written that no claim of its own covers
 # (an INBOX_DIR lived here for one afternoon; mail moved to transponder.messages, which addresses
 #  three ways and marks read per reader instead of deleting for everyone)
 
@@ -104,6 +108,43 @@ def _recall(kind: str, session: str, repo: str) -> str | None:
 def _forget(kind: str, session: str, repo: str) -> None:
     try:
         os.remove(_memo_path(kind, session, repo))
+    except OSError:
+        pass
+
+
+def _session_path(kind: str, session: str) -> str:
+    """Keyed on the SESSION alone — for state that is about the agent rather than about one
+    checkout, and which therefore has to be enumerable across checkouts.
+
+    It does NOT go through `_memo_path`, and the reason is worth stating: that function
+    canonicalises its `repo` argument, and canonical() is realpath(abspath(...)). Handed a real
+    path that is exactly right. Handed a sentinel — `_recall(NOTED_DIR, session, "machine")` does
+    this today — `abspath` joins the sentinel to whatever cwd the hook process happened to inherit,
+    so the same session keys the same memo differently from two different working directories. For
+    a per-checkout memo the argument really is a path and the question never arises; for this one
+    it would split a session's state across two files and silently restart its counters.
+    """
+    d = os.path.join(os.path.dirname(env.lock_dir()), kind)
+    os.makedirs(d, exist_ok=True)
+    return os.path.join(d, f"{hashlib.sha256(session.encode()).hexdigest()[:16]}.txt")
+
+
+def _read_wrote(session: str) -> dict:
+    try:
+        with open(_session_path(WROTE_DIR, session), encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_wrote(session: str, data: dict) -> None:
+    path = _session_path(WROTE_DIR, session)
+    try:
+        tmp = f"{path}.{os.getpid()}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        os.replace(tmp, path)          # this file is rewritten on every write the agent makes
     except OSError:
         pass
 
@@ -256,13 +297,38 @@ def shared_note(session: str, cwd: str = "") -> str | None:
 # one wording — and observe-do-not-predict was always the honest form of this.
 #
 # What genuinely still arrives BEFORE any write is not here and does not need to be: the
-# `declare_scope` conflict answer (an MCP reply, straight into the agent's context) and the
-# shared-checkout intro at UserPromptSubmit/SessionStart, whose stdout the harness does put in
-# front of the model.
+# `declare_scope` conflict answer (an MCP reply, straight into the agent's context) and everything
+# carried at UserPromptSubmit — the shared-checkout intro and the undeclared-writes note below —
+# which the harness does put in front of the model before it acts.
 #
 # One behaviour left with it: a participant writing UNCLAIMED ground used to have its claim
 # silently extended. settle() covers that case as a note asking for extend_scope() — the same
 # treatment a shell has always had, and it does not mutate the map behind the agent's back.
+
+
+def _shown(repo: str) -> str:
+    """A canonical repo, spelt the way its owner spells it — for DISPLAY and for the copy-pasteable
+    remedy, never for a key.
+
+    `canonical` is normcase(realpath(abspath(...))), and on Windows normcase lowercases: the map
+    keys on `c:\\users\\trans\\projects\\app`, which is right, and reads to a human as a path that
+    has been mangled. `realpath` alone resolves the true case back. Cosmetic in the sense that both
+    spellings work, and not cosmetic at all in the sense that a remedy which looks broken does not
+    get run.
+    """
+    return os.path.realpath(repo).replace("\\", "/")
+
+
+def _scope_shown(repo: str, resource: str) -> str:
+    """A neighbour's scope entry, in the terms of the checkout being talked about: true case, and
+    relative, because the absolute canonical form of four claims is four lines of shared prefix and
+    the part that differs is at the end. `/**` is a subtree marker and not part of any path, so it
+    comes off before realpath and goes back on after."""
+    sub = resource.endswith("/**")
+    base = resource[:-3] if sub else resource
+    if scope.canon(base) == scope.canon(repo):
+        return "the whole checkout"
+    return _rel(repo, _shown(base)) + ("/**" if sub else "")
 
 
 def _rel(repo: str, path: str) -> str:
@@ -270,6 +336,181 @@ def _rel(repo: str, path: str) -> str:
     p = os.path.abspath(path).replace("\\", "/")
     r = env.canonical(repo).replace("\\", "/")
     return p[len(r):].lstrip("/") if p.lower().startswith(r.lower()) else p
+
+
+# --- the ask, delivered where it can be answered ---------------------------------------------------
+#
+# The intro (shared_note) says the machine is shared and asks the agent to declare. It is delivered
+# ONCE. For a session that runs nine hours that is one note at the very beginning and silence after,
+# and the silence is not the bug on its own — the placement is. The intro used to be spent at
+# SessionStart, which is BEFORE the human has said what the work is, so it asked "what will you
+# write to?" at the one moment in the session when that question has no answer. By the time it had
+# one, the note was hundreds of thousands of tokens back, or gone through compaction.
+#
+# So the intro moves to UserPromptSubmit (see the adapter), and what follows here is the recurring
+# half: an agent that has been writing without a claim is told what it has written, by name.
+#
+# THIS IS NOT THE WITNESS COMING BACK. The witness is deleted, and it deserved to be — it
+# fingerprinted a tree, could not prove who moved it, and named readers as authors of writes they
+# never made. Nothing below observes the tree, another agent, or anything outside this session's own
+# tool-call payloads. It reports what THIS agent did, from the record of this agent doing it, so
+# there is no attribution to get wrong and nobody else to accuse.
+
+# Writes worth remembering. Bash is deliberately absent and must stay absent: reading a command to
+# work out what it writes is #4 and #7, and the project has paid for that lesson twice. What is left
+# is the set of tools that NAME their target, where the fact needs no interpretation.
+WRITE_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
+
+PATHS_KEPT = 50              # per checkout; the note shows 8 and counts the rest
+
+
+def note_write(session: str, tool: str, tool_input: dict) -> None:
+    """Record a write this session made that no claim of its own covers.
+
+    This runs on every PreToolUse, so it spends no subprocess: the checkout is found by walking up
+    for a `.git` (`scope._checkout_of` — filesystem only), never by `git rev-parse`. Cost on a
+    non-write is one set membership.
+
+    A write INSIDE the session's own declared scope is not recorded at all. There is nothing to say
+    to an agent doing exactly what it said it would, and an information layer that speaks to it
+    anyway teaches it to skim the one message that matters.
+    """
+    if tool not in WRITE_TOOLS:
+        return
+    raw = (tool_input or {}).get("file_path") or (tool_input or {}).get("notebook_path")
+    if not raw:
+        return
+    path = scope.canon(raw)
+    if scope.covers(scope.scope_of(session), path):
+        return
+    repo = scope._checkout_of(path)
+    if not repo:
+        return                            # not in a checkout: nothing here to collide over
+    repo = env.canonical(repo)
+    data = _read_wrote(session)
+    entry = data.setdefault(repo, {"said": 0, "paths": []})
+    if path in entry["paths"]:
+        return
+    entry["paths"] = [*entry["paths"], path][:PATHS_KEPT]
+    _write_wrote(session, data)
+
+
+def wrote_in(session: str) -> list[str]:
+    """The checkouts this session has written to without cover. Enumerable — which is the whole
+    reason this state is keyed on the session and not on (session, repo): an agent that has
+    declared nothing has no checkouts on the map, so there is no other list to iterate."""
+    return sorted(_read_wrote(session))
+
+
+def undeclared_note(session: str, repo: str) -> str | None:
+    """What this agent has written here without cover, or None when there is nothing new to say.
+
+    THE SPEAKING SCHEDULE is 1 write, then 2, 4, 8, 16, ... and the three obvious alternatives are
+    each wrong in a way this project has already lived through:
+
+      every prompt   wallpaper. `_emit` states the rule it breaks — an information layer that
+                     speaks on every call teaches its reader to skim, and it shares a delivery
+                     path with the things that must not be skimmed.
+      once           the bug this exists to fix. One note, at the start, and a long session hears
+                     nothing again however far it drifts.
+      a fixed cap    goes quiet exactly when a session has been running longest, which is when the
+                     undeclared surface is largest.
+
+    Doubling gives a hundred-edit session about seven notes rather than one or a hundred, and every
+    one of them names files the previous one could not have named. It is silent the moment the agent
+    declares: paths that a claim now covers are dropped, and the schedule restarts from what is left,
+    so a later write outside scope is reported promptly instead of waiting out an old counter.
+    """
+    data = _read_wrote(session)
+    entry = data.get(env.canonical(repo))
+    if not entry:
+        return None
+
+    held = scope.scope_of(session)
+    kept = [p for p in entry["paths"] if not scope.covers(held, p)]
+    said = min(entry["said"], len(kept))
+    if kept != entry["paths"] or said != entry["said"]:
+        data[env.canonical(repo)] = {"said": said, "paths": kept}
+        _write_wrote(session, data)
+    if not kept or len(kept) < max(1, said * 2):
+        return None
+    data[env.canonical(repo)] = {"said": len(kept), "paths": kept}
+    _write_wrote(session, data)
+
+    shown = [_rel(repo, p) for p in kept[:8]]
+    where = _shown(repo)
+    files = "FILE" if len(kept) == 1 else "FILES"
+    others = [c for c in scope.touching(repo) if c["session"] != session]
+    out = [f"YOU HAVE WRITTEN {len(kept)} {files} IN THIS CHECKOUT "
+           + ("OUTSIDE WHAT YOU DECLARED." if held else "AND DECLARED NOTHING."), "",
+           f"  {where}", ""]
+    out += [f"    {s}" for s in shown]
+    if len(kept) > len(shown):
+        out.append(f"    ...and {len(kept) - len(shown)} more")
+    out.append("")
+
+    if others:
+        # The overlap between what THIS agent wrote and what somebody else DECLARED. Both sides are
+        # facts already in hand — the writes come from this session's own tool-call payloads, the
+        # region from a claim made before them — so naming the intersection invents nothing. This is
+        # the one thing in the note that is worth interrupting for, and it is emphatically NOT the
+        # witness: it does not claim the other agent's work was damaged, or that anything was
+        # damaged at all. It says where two intentions met. Who holds which bytes now is exactly
+        # what neither fact can answer, and the note says so rather than guessing.
+        landed: list[tuple[dict, list[str]]] = []
+        out += ["SOMEBODY ELSE IS ON THE MAP HERE RIGHT NOW:", ""]
+        for c in others:
+            theirs = ", ".join(_scope_shown(repo, r) for r in c["scope"])
+            out.append(f"    agent {c['session']} holds {theirs}"
+                       + (f" — {c.get('intent')}" if c.get("intent") else ""))
+            hits = [p for p in kept if scope.covers(c["scope"], p)]
+            if hits:
+                landed.append((c, hits))
+                out.append(f"      ^^ AND {len(hits)} OF THE FILES ABOVE "
+                           f"{'IS' if len(hits) == 1 else 'ARE'} INSIDE THAT REGION:")
+                out += [f"           {_rel(repo, _shown(p))}" for p in hits[:5]]
+                if len(hits) > 5:
+                    out.append(f"           ...and {len(hits) - 5} more")
+        out.append("")
+        if landed:
+            first, hits = landed[0]
+            out += [f"You made {'that write' if len(hits) == 1 else 'those writes'}, and that "
+                    "region was declared before you did. What neither of those facts settles is "
+                    "whose bytes are in the file now — nothing here watched "
+                    "it happen, and nothing will reconstruct it for you. Ask, before you write "
+                    "there again:", "",
+                    f"    send_message(repo={where!r},",
+                    f"                 session_id={session!r}, to={first['session']!r},",
+                    f"                 body='I have been editing {_rel(repo, _shown(hits[0]))} — "
+                    f"have I landed on your work?')"]
+        else:
+            out.append("Nothing you have written falls inside what they declared. Nothing was "
+                       "blocked and nothing will be — but you are still invisible to them.")
+    else:
+        out.append("Nobody else is on the map here, so nothing has been lost. That is luck rather "
+                   "than safety: an agent that arrives in the next minute is told about you only "
+                   "if you declared, and finds out the hard way if you did not.")
+    out.append("")
+
+    # Every argument is filled in and the snippet PARSES, and neither is decoration. `session_id` is
+    # the one thing an agent cannot look up from inside its own context — it has to be told — and
+    # `minutes=<how long>` was a syntax error. A remedy whose first step is "work out who you are"
+    # and whose second is "repair this call" is a remedy that does not get run. Only `doing` is left
+    # to the reader, because it is the one argument nothing here can supply.
+    if held:
+        out += ["Widen what you hold. It never blocks and it answers immediately:", "",
+                f"    extend_work(repo={where!r},",
+                f"                session_id={session!r},",
+                f"                add={shown[:3]!r})"]
+    else:
+        out += ["One call, answered immediately, and it is what makes you visible to whoever "
+                "arrives next:", "",
+                f"    declare_work(repo={where!r},",
+                f"                 session_id={session!r},",
+                f"                 paths={shown[:3]!r},",
+                "                 doing='what you are actually doing',",
+                "                 minutes=30)"]
+    return "\n".join(out)
 
 
 # The witness stood here: watch() took a fingerprint of every checkout on the map before a tool
